@@ -1,0 +1,42 @@
+// ==================== 自定义样式 ====================
+// 此文件安装在 hexo 项目的 source/css/ 目录下
+// 编译后生成 /css/custom.css，需在 _config.yml 中引入
+
+// 1. 去掉侧边栏底部渐变遮罩，让边界从头到尾清晰
+.l_left .leftbar-container
+  >.widgets
+    mask: none !important
+    -webkit-mask: none !important
+  &:before
+    mask: none !important
+    -webkit-mask: none !important
+
+// 2. 侧边栏背景图：降低饱和度 + 铺满不留边距 + 不超出边界
+.l_left
+  overflow: hidden         // 裁剪 blur 滤镜溢出，使背景图不超出侧边栏
+.l_left .sidebg
+  --saturate: 100%         // 默认 400%，改为 100% 即原图色彩
+  --inset: 0 !important    // 默认有 blur-px 时会有 32px 内边距
+
+// 3. 布局尺寸调整（取消注释即可生效）
+:root
+  --width-main: 800px            // 正文宽度，默认 720px
+  --side-content-width: 240px    // 侧边栏宽度，默认 224px
+  --gap-margin: 18px             // 卡片到屏幕边缘间距，默认 16px
+  --gap-padding: 18px            // 文字到卡片边缘间距，默认 16px
+  --gap-p: 1.3em                 // 段落间距，默认 calc(body + 4px)
+
+// 4. 侧边栏与正文间距 + 侧边栏底部距离
+.l_body
+  // 三栏（侧边栏-正文-侧边栏）之间的间距，默认 desktop: gap-margin*4
+  grid-gap: 24px
+.l_left
+  // 侧边栏底部到页面底部的距离（改 max-height 中的 24px 即可）
+  // 公式：100vh - 顶部边距 - 底部留白
+  max-height: calc(100vh - 36px - 24px) !important
+.l_left .leftbar-container
+  height: calc(100vh - 36px - 24px) !important
+
+// 4. 侧边栏组件字体微调（如需要可取消注释）
+.l_left .widget-body
+  font-size: 1rem // 0.9375rem

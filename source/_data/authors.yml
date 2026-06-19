@@ -1,0 +1,7 @@
+# 博客作者信息
+# 可以配置多个作者，为不同文章指定不同的 author
+
+xuwilight:
+  name: xuwilight          # 作者名（显示在侧边栏）
+  desc: 用心写每一篇文章      # 介绍语（显示在头像下方）
+  avatar: https://cdn.jsdelivr.net/gh/xaoxuu/cdn-assets/avatar/avatar.png  # ← 替换为你自己的头像 URL

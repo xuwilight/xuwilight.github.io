@@ -1,0 +1,13 @@
+# 自定义侧边栏组件
+# 这里定义的组件可以在 site_tree 的 leftbar/rightbar 中按名称引用
+
+# 导航链接（左侧栏站内搜索下方的导航区域）
+nav_links:
+  layout: markdown
+  title: 导航
+  content: |
+    [📝 博客](/)
+    [📂 归档](/archives/)
+    [🏷️ 标签](/tags/)
+    [📊 分类](/categories/)
+    [👤 关于](/about/)
