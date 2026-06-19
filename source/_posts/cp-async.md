@@ -2,7 +2,7 @@
 title: cp.async 系列
 date: 2026-06-19 16:00:00
 tags: [CUDA, PTX, cp.async, GPU, TMA]
-categories: [CUDA]
+categories: [PTX 学习笔记]
 description: 深入解析 CUDA PTX cp.async 系列指令，涵盖 Non-bulk copy、Bulk-copy (TMA)、Tensor copy 以及 TMA Swizzle 等高级特性。
 ---
 
