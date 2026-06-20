@@ -6,7 +6,7 @@ categories: [PTX 学习笔记]
 description: 深入解析 CUDA PTX cp.async 系列指令，涵盖 Non-bulk copy、Bulk-copy (TMA)、Tensor copy 以及 TMA Swizzle 等高级特性。
 ---
 
-# cp.async 系列
+# cp.async 系列指令
 
 cp.async 指令是 Ampere 架构引入的一种异步数据拷贝指令，并在 Hopper 架构上进行了拓展。
 

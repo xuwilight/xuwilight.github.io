@@ -25,7 +25,7 @@
   --side-content-width: 224px    // 侧边栏宽度，默认 224px
   --gap-margin: 16px             // 卡片到屏幕边缘间距，默认 16px
   --gap-padding: 16px            // 文字到卡片边缘间距，默认 16px
-  --gap-p: calc(body + 4px)                 // 段落间距，默认 calc(body + 4px)
+  --gap-p: calc(body + 4px)      // 段落间距，默认 calc(body + 4px)
 
 // 4. 侧边栏与正文间距 + 侧边栏底部距离
 .l_body
@@ -43,7 +43,11 @@
 .l_left .widget-body
   font-size: 1rem // 0.9375rem
 
-// 5. 文章内页：侧边栏自动缩窄，只留导航图标 + 底部社交链接
+// 5. 文章内页：侧边栏自动缩窄 + 正文加宽
+// 只在文章内页增大正文宽度，不影响主页
+.l_body[layout="post"]
+  --width-main: 860px   // 主页 760px，文章页利用缩窄侧边栏后的空间
+
 .l_body[layout="post"] .l_left
   // 隐藏 logo、搜索、widgets、背景图层及光晕
   .logo-wrap, .widgets, .sidebg
@@ -105,3 +109,73 @@
   p:has(> img)
     margin-top: 24px
     margin-bottom: 24px
+
+
+// ==================== 7. 正文排版优化 ====================
+
+// 7.1 段落间距：增大段落间距，让它明显大于行间距
+.md-text.content
+  // 行高提升（中文需要更大的行高）
+  line-height: 1.8
+
+  // 段落间距改为 1.5 倍行距的视觉间距
+  p, ul, ol
+    margin-top: 'calc(%s * 1.2)' % var(--fsp)   // ≈20.4px (原来 17px)
+    margin-bottom: 'calc(%s * 1.2)' % var(--fsp)
+
+// 7.2 修复标题层级：确保 h1 > h2 > h3 递减
+.md-text.content
+  h1
+    font-size: 'calc(%s + 12px)' % var(--fsp)  // 29px（原来被 h2 反超）
+  h2
+    font-size: 'calc(%s + 8px)' % var(--fsp)   // 25px
+  h3
+    font-size: 'calc(%s + 4px)' % var(--fsp)   // 21px
+  h4
+    font-size: 'calc(%s + 1px)' % var(--fsp)   // 18px
+
+// 7.3 标题间距：统一设定上下间距
+.md-text.content
+  h1
+    margin-top: 2em
+    margin-bottom: 0.8em
+  h2
+    margin-top: 1.8em
+    margin-bottom: 0.7em
+  h3
+    margin-top: 1.5em
+    margin-bottom: 0.6em
+  h4
+    margin-top: 1.3em
+    margin-bottom: 0.5em
+  h5, h6
+    margin-top: 1em
+    margin-bottom: 0.4em
+
+// 7.4 列表优化：增大列表项间距，增强层级感
+.md-text.content
+  li + li
+    margin-top: 0.3em   // 列表项之间有点间隔
+  ul, ol
+    padding-left: 'calc(%s * 1.5)' % var(--fsp)  // 增大缩进
+  // 嵌套列表缩进更深
+  ul ul, ol ol, ul ol, ol ul
+    padding-left: 'calc(%s * 1.2)' % var(--fsp)
+
+// 7.5 引用块增强
+.md-text.content blockquote
+  margin-top: 'calc(%s * 1.2)' % var(--fsp)
+  margin-bottom: 'calc(%s * 1.2)' % var(--fsp)
+  padding: 'calc(%s * 0.5)' % var(--fsp) var(--fsp)  // 上下也加内边距
+  border-radius: 0 8px 8px 0  // 右侧微圆角
+
+// 7.6 表格间距
+.md-text.content table:not([class])
+  margin: 'calc(%s * 1.5)' % var(--fsp) 0
+
+// 7.7 标题前缀字号微调（让 # = 等符号更协调）
+.l_body[type='tech'] article.content
+  h2 > a:first-child:before
+    font-size: 0.8em  // # 符号稍大一些
+  h3 > a:first-child:before
+    font-size: 0.7em
