@@ -8,7 +8,7 @@
 
   # 左上角 logo 区域
   logo:
-    avatar: '[/images/avatar.jpg](/about/)'
+    avatar: '[/assets/avatar.jpg](/about/)'
     title: '[{config.title}](/)'
     subtitle: '{config.subtitle}'
 
