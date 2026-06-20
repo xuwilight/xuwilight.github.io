@@ -78,8 +78,8 @@
   // 缩窄整体宽度，贴到最左边
   width: 64px !important
   min-width: 64px
-  justify-self: start
-  /* margin-left: 0 */
+  justify-self: start !important  // Chrome 兼容：强制覆盖默认的 right 对齐
+  margin-left: 16px !important        // 确保无左边距
   margin-right: 4px
   // 容器居中
   .leftbar-container
