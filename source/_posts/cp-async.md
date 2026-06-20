@@ -1,5 +1,5 @@
 ---
-title: cp.async 系列
+title: cp.async 系列指令
 date: 2026-06-20 22:00:00
 tags: [CUDA, PTX, cp.async, GPU, TMA]
 categories: [PTX 学习笔记]
