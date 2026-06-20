@@ -2,7 +2,7 @@
 title: CuTe tilledCOPY
 date: 2026-06-20 21:00:00
 tags: [CUTLASS, CuTe, tilledCOPY, Copy, GPU]
-categories: [Cutlass学习笔记]
+categories: [Cutlass 学习笔记]
 description: 深入解析 CuTe tilledCOPY 机制，涵盖 Copy 指令的创建、partition 操作及多种 Copy 实现方式。
 published: false
 ---

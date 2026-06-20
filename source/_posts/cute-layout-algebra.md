@@ -2,7 +2,7 @@
 title: CuTe Layout Algebra
 date: 2026-06-20 17:00:00
 tags: [CUTLASS, CuTe, Layout, Algebra, GPU]
-categories: [Cutlass学习笔记]
+categories: [Cutlass 学习笔记]
 description: 深入解析 CuTe Layout Algebra 的核心概念，涵盖 Layout 的代数运算、Composition、Complement、Division 等操作。
 ---
 

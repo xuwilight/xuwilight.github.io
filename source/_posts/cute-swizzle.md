@@ -2,7 +2,7 @@
 title: CuTe Swizzle
 date: 2026-06-20 18:00:00
 tags: [CUTLASS, CuTe, Swizzle, GPU, Bank Conflict]
-categories: [Cutlass学习笔记]
+categories: [Cutlass 学习笔记]
 description: 深入解析 CuTe Swizzle 机制，涵盖 Bank Conflict 原理、Swizzle 布局、Swizzle 与 Layout 的组合方式等核心概念。
 ---
 
