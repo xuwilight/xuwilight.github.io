@@ -15,21 +15,23 @@
 .l_left
   overflow: hidden         // 裁剪 blur 滤镜溢出，使背景图不超出侧边栏
 .l_left .sidebg
+  /* display: none */
   --saturate: 100%         // 默认 400%，改为 100% 即原图色彩
-  --inset: 0 !important    // 默认有 blur-px 时会有 32px 内边距
+  --inset: 0px !important    // 默认有 blur-px 时会有 32px 内边距
 
 // 3. 布局尺寸调整（取消注释即可生效）
 :root
-  --width-main: 800px            // 正文宽度，默认 720px
-  --side-content-width: 240px    // 侧边栏宽度，默认 224px
-  --gap-margin: 18px             // 卡片到屏幕边缘间距，默认 16px
-  --gap-padding: 18px            // 文字到卡片边缘间距，默认 16px
-  --gap-p: 1.3em                 // 段落间距，默认 calc(body + 4px)
+  --width-main: 720px            // 正文宽度，默认 720px
+  --side-content-width: 224px    // 侧边栏宽度，默认 224px
+  --gap-margin: 16px             // 卡片到屏幕边缘间距，默认 16px
+  --gap-padding: 16px            // 文字到卡片边缘间距，默认 16px
+  --gap-p: calc(body + 4px)                 // 段落间距，默认 calc(body + 4px)
 
 // 4. 侧边栏与正文间距 + 侧边栏底部距离
 .l_body
   // 三栏（侧边栏-正文-侧边栏）之间的间距，默认 desktop: gap-margin*4
-  grid-gap: 24px
+  grid-gap: 16px
+  /* desktop: gap-margin */
 .l_left
   // 侧边栏底部到页面底部的距离（改 max-height 中的 24px 即可）
   // 公式：100vh - 顶部边距 - 底部留白
@@ -41,24 +43,65 @@
 .l_left .widget-body
   font-size: 1rem // 0.9375rem
 
-// 5. 文章内页：侧边栏自动缩窄，只留导航图标（取消注释启用）
-// .l_body[layout="post"] .l_left
-//   // 隐藏侧边栏大部分内容
-//   .logo-wrap, .widgets, footer, .search-wrapper
-//     display: none !important
-//   // 导航图标上下排列
-//   .nav-area .menu
-//     flex-direction: column
-//     gap: 12px
-//   // 只显示图标，隐藏文字
-//   .nav-area .nav-item span
-//     display: none
-//   // 缩窄整体宽度
-//   width: 64px !important
-//   min-width: 64px
-//   margin-right: 4px
-//   .sidebg
-//     display: none  // 背景图也隐藏
-//   .leftbar-container
-//     padding: 12px 4px
-//     justify-content: center
+// 5. 文章内页：侧边栏自动缩窄，只留导航图标 + 底部社交链接
+.l_body[layout="post"] .l_left
+  // 隐藏 logo、搜索、widgets、背景图层及光晕
+  .logo-wrap, .widgets, .sidebg
+    display: none !important
+  .leftbar-container:before
+    display: none
+  // 导航图标竖向排列（覆盖 grid 为 flex 列）
+  .nav-area .menu
+    display: flex
+    flex-direction: column
+    gap: 8px
+  // 只显示图标，隐藏文字
+  .nav-area .nav-item span
+    display: none
+  // 隐藏"关于"导航项（只保留博客、分类 + 底部主题切换）
+  .nav-area .nav-item:last-child
+    display: none
+  // 菜单项去掉背景，圆形 hover，尺寸对齐底部图标
+  .nav-area .nav-item
+    background: transparent
+    min-height: unset
+    border-radius: 50%
+    width: 32px
+    height: 32px
+    padding: 6px
+    img,svg
+      height: 20px
+  // 缩窄整体宽度，贴到最左边
+  width: 64px !important
+  min-width: 64px
+  justify-self: start
+  /* margin-left: 0 */
+  margin-right: 4px
+  // 容器居中
+  .leftbar-container
+    padding: 12px 4px
+    align-items: center
+    justify-content: flex-end
+    text-align: center
+  // 底部社交图标竖向排列
+  footer.footer
+    margin: 0.5rem 4px 1rem
+    .social-wrap
+      display: flex
+      flex-direction: column
+      align-items: center
+      gap: 4px
+
+// 6. 文章内页排版微调
+.md-text.content
+  // 代码块上下间距增大
+  .highlight
+    margin: 28px 0
+  // 图片上下间距增大
+  .tag-plugin.image
+    margin-top: 24px
+    margin-bottom: 24px
+  // 段落内嵌的图片（![]() 语法）
+  p:has(> img)
+    margin-top: 24px
+    margin-bottom: 24px

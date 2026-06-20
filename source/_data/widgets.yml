@@ -3,11 +3,54 @@
 
 # 导航链接（左侧栏站内搜索下方的导航区域）
 nav_links:
-  layout: markdown
+  layout: linklist
   title: 导航
-  content: |
-    [📝 博客](/)
-    [📂 归档](/archives/)
-    [🏷️ 标签](/tags/)
-    [📊 分类](/categories/)
-    [👤 关于](/about/)
+  columns: 1
+  items:
+    - title: 博客
+      url: /
+      icon: solar:documents-bold-duotone
+    - title: 分类
+      url: /categories/
+      icon: solar:notebook-bookmark-bold-duotone
+    - title: 标签
+      url: /tags/
+      icon: solar:hashtag-square-bold
+    - title: 归档
+      url: /archives/
+      icon: default:calendar
+    - title: 关于
+      url: /about/
+      icon: default:pin
+
+recent:
+    layout: recent
+    rss: # /atom.xml # npm i hexo-generator-feed
+    limit: 10 # Count of posts
+
+toc:
+    layout: toc
+    list_number: false # 是否显示序号
+    min_depth: 2
+    max_depth: 5
+    fallback: recent # Use a backup widget when toc does not exist.
+
+# 标签云组件
+tagcloud:
+  layout: tagcloud
+  title: 标签索引
+  # 标签云配置
+  min_font: 12
+  max_font: 24
+  amount: 100
+  orderby: name
+  order: 1 # 1, sac 升序；-1, desc 降序
+  color: false # 使用颜色
+  start_color: # 开始的颜色。您可使用十六进位值（#b700ff），rgba（rgba(183, 0, 255, 1)），hsla（hsla(283, 100%, 50%, 1)）或 颜色关键字。此变量仅在 color 参数开启时才有用。
+  end_color: # 结束的颜色。您可使用十六进位值（#b700ff），rgba（rgba(183, 0, 255, 1)），hsla（hsla(283, 100%, 50%, 1)）或 颜色关键字。此变量仅在 color 参数开启时才有用。
+  show_count: false # 显示每个标签的文章总数
+
+
+# 相关文章（文章内页侧边栏）
+related:
+    layout: related
