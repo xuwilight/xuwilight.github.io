@@ -2,9 +2,9 @@
 title: Shared memory 和 Swizzle
 date: 2026-06-20 18:00:00
 tags: [CUTLASS, CuTe, Swizzle, GPU, Bank Conflict, Shared memory]
-categories: [Cutlass 学习笔记, GPU]
+categories: [GPU 优化笔记]
 mathjax: true
-description: 深入解析 CuTe Swizzle 机制，涵盖 Bank Conflict 原理、Swizzle 布局、Swizzle 与 Layout 的组合方式等核心概念。
+description: 文章介绍了 Shared Memory 的基本特性与组织结构，深入剖析了 Bank Conflict 的产生原因和优化策略，最后介绍了 CuTe 中的 Swizzle 机制。
 ---
 
 ## Shared Memory
@@ -255,7 +255,7 @@ profile 结果显示如下，8 个 instructions 和 requests，0 次 bank confli
 ![](/assets/cute-swizzle/image_10.png)
 
 
-## cute 中 swizzle 的实现
+## CuTe 中 swizzle 的实现
 
 cute 中 swizzle 的基本实现如下。
 
