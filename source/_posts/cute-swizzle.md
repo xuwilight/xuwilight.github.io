@@ -2,7 +2,7 @@
 title: Shared memory 和 Swizzle
 date: 2026-06-20 18:00:00
 tags: [CUTLASS, CuTe, Swizzle, GPU, Bank Conflict, Shared memory]
-categories: [GPU 优化笔记]
+categories: [GPU 优化学习笔记]
 mathjax: true
 description: 文章介绍了 Shared Memory 的基本特性与组织结构，深入剖析了 Bank Conflict 的产生原因和优化策略，最后介绍了 CuTe 中的 Swizzle 机制。
 ---
