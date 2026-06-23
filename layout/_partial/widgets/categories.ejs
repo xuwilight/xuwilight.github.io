@@ -1,0 +1,30 @@
+<%
+function layoutDiv() {
+  if (site.categories == undefined || site.categories.length == 0) {
+    return '';
+  }
+  var el = `<widget class="widget-wrapper${scrollreveal(' ')} categories">`
+  // header
+  if (item.title) {
+    el += '<div class="widget-header dis-select">';
+    el += '<span class="name">' + item.title + '</span>';
+    el += '</div>';
+  }
+  // body
+  el += '<div class="widget-body fs14">';
+  // sort categories by post count descending, then by name
+  var cats = site.categories.sort('length', -1).toArray();
+  cats.forEach(cat => {
+    if (!cat || cat.length == 0) { return; }
+    el += '<a class="item" href="' + url_for(cat.path) + '">';
+    el += '<span class="icon"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="currentColor" d="M2 6a2 2 0 0 1 2-2h5l2 2h9a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6z" opacity="0.3"/><path fill="currentColor" d="M2 6a2 2 0 0 1 2-2h5l2 2h9a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6z"/></svg></span>';
+    el += '<span class="name">' + cat.name + '</span>';
+    el += '<span class="count">' + cat.length + '</span>';
+    el += '</a>';
+  });
+  el += '</div>';
+  el += '</widget>';
+  return el;
+}
+%>
+<%- layoutDiv() %>

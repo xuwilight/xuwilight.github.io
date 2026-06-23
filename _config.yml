@@ -94,8 +94,12 @@ deploy:
 # 注入自定义标签到 <head>（如 CDN 字体）
 inject:
   head:
-    # 霞鹜文楷 - 免费可商用的中文网络字体
+   # 霞鹜文楷 - 免费可商用的中文网络字体
     - '<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/lxgw-wenkai-webfont@1.7.0/style.css" />'
+    # Google Fonts - 思源宋体 (Noto Serif SC) + 思源黑体 (Noto Sans SC)
+    - '<link rel="preconnect" href="https://fonts.googleapis.com">'
+    - '<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>'
+    - '<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@400;500;700&display=swap" rel="stylesheet">'
     # 自定义样式（侧边栏遮罩等）
     - '<link rel="stylesheet" href="/css/custom.css" />'
 

@@ -51,6 +51,11 @@ tagcloud:
   show_count: false # 显示每个标签的文章总数
 
 
+# 分类索引（主页右侧栏）
+categories:
+    layout: categories
+    title: 分类索引
+
 # 相关文章（文章内页侧边栏）
 related:
     layout: related

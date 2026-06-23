@@ -43,7 +43,7 @@
     # 主页
     home:
       leftbar: nav_links, recent
-      rightbar: 
+      rightbar: categories, tagcloud
     # 博客列表页（包含分类/标签/归档页）
     index_blog:
       base_dir: blog
@@ -98,9 +98,8 @@
   style:
     prefers_theme: auto  # auto / light / dark
     font-family:
-      # 中文字体推荐：LXGW WenKai（霞鹜文楷）、Noto Sans SC、PingFang SC
-      # 英文字体推荐：Inter、Roboto、system-ui
-      body: '"LXGW WenKai", "Noto Sans SC", "PingFang SC", "Microsoft YaHei", system-ui, -apple-system, sans-serif'
+      # 思源宋体（更正式）+ 思源黑体
+      body: '"LXGW WenKai", "Noto Sans SC", "Noto Serif SC",  "PingFang SC", "Microsoft YaHei", system-ui, -apple-system, sans-serif'
       code: '"JetBrains Mono", "Fira Code", Menlo, Monaco, "Courier New", monospace'
       codeblock: '"JetBrains Mono", "Fira Code", Menlo, Monaco, "Courier New", monospace'
     font-size:
@@ -116,7 +115,14 @@
       # background-opacity: 0.6
       background-color-light: rgba(255,255,255,0.6)  # 亮色模式侧边栏背景
       background-color-dark: rgba(30,30,30,0.7)       # 暗色模式侧边栏背景
-
+    border-radius:
+      card-l: 16px    # 侧边栏、文章横幅
+      card: 8px      # 文章内大部分卡片
+      card-s: 8px    # 小型卡片
+      bar: 8px        # 横条类元素
+      image-l: 24px   # 非技术类文章插图
+      image: 16px     # 技术类文章插图
+      image-s: 8px    # 评论区图片
 
     # 主内容区
     site:
