@@ -3,7 +3,7 @@ title: cp.async 系列指令（一）
 date: 2026-06-20 22:00:00
 tags: [CUDA, PTX, cp.async, GPU]
 categories: [PTX 学习笔记]
-description: 介绍 CUDA PTX cp.async 系列指令的第一篇文章。先总览了 cp.async 异步拷贝指令，然后介绍了两种异步拷贝完成机制，最后详细介绍了 Ampere 架构上 cp.async 使用方法。
+description: 介绍 cp.async 系列指令的第一篇文章。先总览了 cp.async 异步拷贝指令，然后介绍了两种异步拷贝完成机制，最后详细介绍了 Ampere 架构上 cp.async 使用方法。
 ---
 
 ## cp.async 系列指令
