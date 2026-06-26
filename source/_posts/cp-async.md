@@ -1,6 +1,6 @@
 ---
 title: cp.async 系列指令（一）
-date: 2026-06-20 22:00:00
+date: 2026-06-20 20:00:00
 tags: [CUDA, PTX, cp.async, GPU]
 categories: [PTX 学习笔记]
 description: 介绍 cp.async 系列指令的第一篇文章。先总览了 cp.async 异步拷贝指令，然后介绍了两种异步拷贝完成机制，最后详细介绍了 Ampere 架构上 cp.async 使用方法。
@@ -49,7 +49,7 @@ commit 操作会把前面所有还没有被提交的异步操作提交到一个 
 
 ## Mbarrier-based mechanism
 
-mbarrier 是一个在共享内存中的对象，详见 [mbarrier](../_posts/mbarrier.md)。一个线程可以通过 mbarrier 的状态来确定一个或多个异步操作是否完成。当 mbarrier 的当前状态完成后，说明所有被当前状态跟踪的异步操作均已完成，并且所有参与 mbarrier 的线程可以访问异步操作的结果。
+mbarrier 是一个在共享内存中的对象，详见 [mbarrier](../mbarrier/)。一个线程可以通过 mbarrier 的状态来确定一个或多个异步操作是否完成。当 mbarrier 的当前状态完成后，说明所有被当前状态跟踪的异步操作均已完成，并且所有参与 mbarrier 的线程可以访问异步操作的结果。
 
 使用流程如下：
 
