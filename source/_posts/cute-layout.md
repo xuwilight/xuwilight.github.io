@@ -4,6 +4,7 @@ date: 2025-03-20 16:00:00
 tags: [CUTLASS, CuTe, Layout, GPU]
 categories: [Cutlass 学习笔记]
 description: 文章介绍了 CuTe Layout 的核心概念，涵盖 Layout 的组成、Stride、Tile、Partition、Slice 等操作。
+mathjax: true
 ---
 
 
@@ -282,7 +283,7 @@ int offset3 = layout(make_coord(2,make_coord(1,0))); // 5
 使用 "_" 可以访问对应位置的多个元素。
 
 <div align="center">
-        <img src="/assets/cute-layout/image_17.png" width="60%" height="auto" alt="underscore access">
+        <img src="/assets/cute-layout/image_17.png" width="90%" height="auto" alt="underscore access">
         <small>使用 _ 访问元素</small>
 </div>
 <br>
@@ -375,9 +376,9 @@ Layout e = flatten(c);                    // (_2,_3,_5,_7):(_1,_2,_6,_30)
 
 Layouts are functions from integers to integers.
 
-## reference：
+## reference
 
 1. https://github.com/NVIDIA/cutlass/blob/main/media/docs/cute/01_layout.md
-1. https://zhuanlan.zhihu.com/p/661182311
-1. https://www.cs.utexas.edu/~flame/BLISRetreat2023/slides/Thakkar_BLISRetreat2023.pdf
-1. https://dl.acm.org/doi/pdf/10.1145/3582016.3582018
+2. https://zhuanlan.zhihu.com/p/661182311
+3. https://www.cs.utexas.edu/~flame/BLISRetreat2023/slides/Thakkar_BLISRetreat2023.pdf
+4. https://dl.acm.org/doi/pdf/10.1145/3582016.3582018

@@ -135,9 +135,7 @@ coalesce with (1,1)
 
 Layout 可以看成是逻辑空间的坐标到物理空间索引的映射函数，因此 layout 之间也可以定义函数的组合。
 
-```
-offset = Layout(coordinate)
-```
+$$offset = Layout(coordinate)$$
 
 layout 的组合是 cute 的核心概念，用于所有的高阶 layout 操作。
 
@@ -195,15 +193,15 @@ $A \circ B = A \circ (B_0, B_1, ...) = (A \circ B_0, A \circ B_1, ...)$。
 
 当布局 B 是单射（injective）时，组合操作满足左分配律。
 
-我们先假设 B 是一个具有整数形状和步幅的 layout，即 $B = s:d$。假设 A 是一个经过展平且合并过的 layout（flattened，coalesce layout）。
+我们先假设 B 是一个具有整数形状和步幅的 layout，即 $B = s:d$。假设 A 是一个经过展平且合并过的 layout。
 
-当 A 是整数 layout 时，A 和 B 的组合结果如下：
+当 A 是整数 layout 时，可以得到 A 和 B 的组合结果如下：
 
 \begin{equation*}
 R = A \circ B = a:b \circ s:d = s:(b \times d)
 \end{equation*}
 
-但是当 A 是个多维 layout 时，计算过程稍微复杂，主要分为两步。
+当 A 是一个多维 layout 时，计算过程主要分为下面两步：
 
 1. 从 A 中每隔 d 个元素取一个元素。
 2. 保留第一步中取到元素的前 s 个。
@@ -259,7 +257,7 @@ shapeA[1] = 4;
 strideB = 1;
 ```
 
-计算结束，此时 shapeA 从 (6,4) 变成了 (2,4)
+计算结束，此时 shapeA 从 (6,4) 变成了 (2,4)。
 
 下图表示 shapeA 的变化过程，深色部分就是计算后的 shapeA 对应的新形状。
 
@@ -344,7 +342,7 @@ void shape_mod(int* shapeA, int N, int& shapeB) {
 }
 ```
 
-输入：形状数组 shapeA，这里的形状是 shape_div 处理后得到的形状；维度 N 和目标保留元素数 shapeB
+输入：形状数组 shapeA，这里的形状是 shape_div 处理后得到的形状；维度 N 和目标保留元素数 shapeB。
 
 操作：逐维度更新 shapeA，保留每个维度不超过 shapeB 的部分，并更新剩余需要保留的元素数。
 
@@ -352,7 +350,7 @@ void shape_mod(int* shapeA, int N, int& shapeB) {
 
 继续以 shapeA = (6,4)，layoutB = 4:3 为例。
 
-shapeA 在进行形状除法后变为 (2,4)。shapeB = 4
+shapeA 在进行形状除法后变为 (2,4)，shapeB = 4。
 
 当 i = 0 时，
 
@@ -397,7 +395,7 @@ shapeB = 1;
 
 得到最终 shape 后，根据 A 和 B 的 stride 可以计算得到组合后 shape 对应的 stride。从前面形状除法的过程中也不难发现，在更新 strideB 的同时与 A 对应的 stride 相乘就能得到最终结果的 stride。
 
-还是以 shapeA = (6,4)，layoutB = 4:3 为例。假设 shapeA 对应的 stride 是 (1,6)。
+还是以 shapeA = (6,4)，layoutB = 4:3 为例，假设 shapeA 对应的 stride 是 (1,6)。
 
 通过形状除法和形状取模可以得到最终的 shape 是 (2,2)。
 
@@ -464,27 +462,30 @@ def composition(layoutA, layoutB):
 \end{align*}
 
 
-这个组合过程可以描述为将 layout \((10, 2) : (16, 4)\) 重新组合为一个 \(5*4\) 的列主序矩阵。
+这个组合过程可以描述为将 layout $(10, 2) : (16, 4)$ 重新组合为一个 $5×4$ 的列主序矩阵。
 
-首先根据上面的规则， \((5, 4) : (1, 5)\) 可以拆分为 \((5 : 1, 4 : 5)\)。
+首先根据上面的规则， $(5, 4) : (1, 5)$ 可以拆分为 $(5 : 1, 4 : 5)$。
 
 因此
 $$
 (10, 2) : (16, 4) \circ (5, 4) : (1, 5) = ((10, 2) : (16, 4) \circ 5 : 1, (10, 2) : (16, 4) \circ 4 : 5)
 $$
 
-首先计算 $\((10, 2) : (16, 4) \circ 5 : 1\)$ ，根据上面的计算方法得到 $\((5, 1) : (16, 4)\)$，coalesce 后变成 $\(5 : 16\)$ 。
+首先计算 $(10, 2) : (16, 4) \circ 5 : 1$ 。根据上面的计算方法得到 $(5, 1) : (16, 4)$，coalesce 后变成 $5 : 16$ 。
 
-然后计算 $\((10, 2) : (16, 4) \circ 4 : 5\)$ ， $\((10, 2)/5 = (2, 2)\)$ ， $\((2, 2)\%4 = (2, 2)\)$ ， $\(stride = (16 * 5, 4 * 1) = (80, 4)\)$ ，coalesce后得到 $\((2, 2) : (80, 4)\)$ 。
+然后计算 $(10, 2) : (16, 4) \circ 4 : 5$ 。 
 
-最后将 $\(5 : 16\)$ 和 $\((2, 2) : (80, 4)\)$ 拼接一起得到
+$$ shape = (10, 2)/5 = (2, 2)，(2, 2) \\% 4 = (2, 2)$$
+
+$$ stride = (16 × 5, 4 × 1) = (80, 4)$$
+coalesce 后得到 $(2, 2) : (80, 4)$ 。
+
+最后将 $5 : 16$ 和 $(2, 2) : (80, 4)$ 拼接一起得到
 $$
-(5 : 16, (2, 2) : (80, 4)) = (5, (2, 2)) : (16, (80, 4)) 。
+(5 : 16, (2, 2) : (80, 4)) = (5, (2, 2)) : (16, (80, 4)) 
 $$
 
-在 cute 中，上面的 shape 和 stride 如果用静态整数表示，组合结果为 (5,(2,2)):(16,(80,4))，如果用动态整数表示，组合结果为 ((5,1),(2,2)):((16,4),(80,4))。
-
-这两种结果在数学上是等价的。当使用动态整数时，由于一些限制没有对结果做 coalesce。
+在 cute 中，上面的 shape 和 stride 如果用静态整数表示，组合结果为 $(5,(2,2)):(16,(80,4))$，如果用动态整数表示，组合结果为 $((5,1),(2,2)):((16,4),(80,4))$，这两种结果在数学上是等价的。
 
 下图展示了 layoutA 和 layoutB 以及他们组合结果 layoutC 的布局。
 
@@ -551,11 +552,13 @@ auto result = composition(a, tiler);
 
 继续以 (12,(4,8)):(59,(13,1)) 为例，shape (3,8) 可以看作 tiler (3:1, 8:1)，因此组合结果如下图灰色部分所示。这个结果就相当于在 layout a 中取一个大小为 3 行 4 列的数据块（Tile）。
 
-> **TODO:** 图片待补充（shape tiler 示意图）
+<div align="center">
+        <img src="/assets/cute-layout-algebra/image5.png" width="100%" height="auto" alt="layout1">
+        <small></small>
+</div>
+<br>
 
-Tile 这个概念在后面会反复提及。一个 Tile 可以理解为具有一定布局的数据块。
-
-这个概念经常用在矩阵分块中。比如一个 32×32 的矩阵按照 8×8 的大小可以分为 16 个 tile，每个 tile 的大小就是 8×8。根据 tile 的 layout 不同，每个 tile 分到的数据就不一样，tile 与 tile 之间的 layout（也就是后面提到的补集）也不一样。
+一个 Tile 可以理解为具有一定布局的数据块，这个概念经常用在矩阵分块中。比如一个 32×32 的矩阵按照 8×8 的大小可以分为 16 个 tile，每个 tile 的大小就是 8×8。根据 tile 的 layout 不同，每个 tile 分到的数据就不一样，tile 与 tile 之间的 layout（也就是后面提到的补集）也不一样。
 
 ## Complement
 
@@ -567,23 +570,15 @@ Layout complement(LayoutA const& layout_a, Shape const& cotarget)
 
 补集操作通过函数 complement(LayoutA, Shape M) 实现，满足以下性质：
 
-1. **大小约束：**
+1. **大小约束：** 补集布局 R 的大小（size）和陪域大小（cosize）受目标形状 M 大小的限制。
 
-补集布局 R 的大小（size）和陪域大小（cosize）受目标形状 M 大小的限制。
+2. **有序性：** 补集布局 R 是有序的。R 的步幅（stride）必须是递增且正数的，保证其唯一性。
 
-2. **有序性：**
-
-补集布局 R 是有序的。R 的步幅（stride）必须是递增且正数的，保证其唯一性。
-
-3. **互斥性：**
-
-补集布局 R 的陪域（codomain）与原布局 A 的陪域互不相交。布局 R 试图"补全"布局 A 的陪域。
+3. **互斥性：** 补集布局 R 的陪域（codomain）与原布局 A 的陪域互不相交。布局 R 试图"补全"布局 A 的陪域。
 
 上述定义翻译自原文档，可能不太严谨。
 
-只看定义理解起来有些抽象。根据对示例和代码的理解，个人觉得：对于一个 layout A，如果存在一个 layout R，当把 A 按照 R 排列后得到的结果能完全覆盖 M 空间的所有元素，就称 layout R 是 layout A 在 M 下的补集。
-
-换句话说就是：一个大矩阵 M，分成很多块（Tile），每个块的布局是 layout A，块与块之间的布局就是 layout A 在大矩阵上的补集 R。
+只看定义理解起来有些抽象。根据对示例和代码的理解，个人觉得：一个大矩阵 M，分成很多块（Tile），每个块的布局是 layout A，块与块之间的布局就是 layout A 在大矩阵上的补集 R。
 
 ### 计算过程
 
@@ -607,7 +602,12 @@ Layout complement(LayoutA const& layout_a, Shape const& cotarget)
 
 下图表示 complement(4:2, 24) 的结果。灰色是 layout A，蓝色是对 layout 的填充，红色和绿色是复制的结果。
 
-> **TODO:** 图片待补充（complement(4:2, 24) 示意图）
+<div align="center">
+        <img src="/assets/cute-layout-algebra/image6.png" width="100%" height="auto" alt="layout1">
+        <small></small>
+</div>
+<br>
+
 
 ### Python 代码
 
@@ -670,4 +670,22 @@ def complement(layout, max_idx=1):
 
 下图表示 complement((2,2):(1,6), 24) 的结果。根据图片也可以理解为一个 6 行 4 列的矩阵，被 layout = (2,2):(1,6) 的 tile 分，可以分为 6 个 tile，这 6 个 tile 之间的 layout 是 (3,2):(2,12)。
 
-> **TODO:** 图片待补充（complement((2,2):(1,6), 24) 示意图）
+<div align="center">
+        <img src="/assets/cute-layout-algebra/image7.png" width="100%" height="auto" alt="layout1">
+        <small></small>
+</div>
+<br>
+
+
+## 总结
+
+CuTe Layout Algebra 是 Cutlass 3.0 推出的最重要的特性之一，也是整个 cute 中最抽象的部分。本文结合 cutlass 官方代码的实现以及自己的理解，简单介绍了一下基础的 layout algebra 的计算过程。可能有些运算过程介绍的不是很精确，如果想了解详细的数学证明可以参考下面 reference 里的两篇论文。
+
+个人觉得 cutlass 之所以难学，主要原因有两点：一是不知道每代 GPU 上的最新特性，导致不知道代码具体是干什么的。二是不知道不同的 layout algebra 的计算过程和意义，所以也就不知道会产生什么结果。所以只要解决了这两点，cutlass 用起来就易如反掌了。
+
+不过对于 layout algebra，也没必要花太多时间去研究具体的原理，毕竟 cutlass 中都封装成 API 了，多看几个例子了解每个代数是怎么用的，在什么时候用就行了。
+
+## reference
+
+1. https://arxiv.org/pdf/2603.02298
+2. https://arxiv.org/pdf/2601.05972
