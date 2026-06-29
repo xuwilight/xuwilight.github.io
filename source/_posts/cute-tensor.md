@@ -1,9 +1,10 @@
 ---
-title: CuTe Tensor
-date: 2026-06-20 19:00:00
+title: CuTe 学习笔记（四）CuTe Tensor
+date: 2025-03-22 18:00:00
 tags: [CUTLASS, CuTe, Tensor, GPU]
 categories: [Cutlass 学习笔记]
-description: 深入解析 CuTe Tensor 的核心概念，涵盖 Tensor 的创建、Layout 映射、make_tensor 等基础操作。
+mathjax: true
+description: 文章介绍了 CuTe Tensor 的核心概念，涵盖 Tensor 的创建、Layout 映射、make_tensor 等基础操作。
 ---
 
 # CuTe_Tensor
