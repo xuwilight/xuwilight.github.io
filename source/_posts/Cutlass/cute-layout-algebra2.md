@@ -1,8 +1,8 @@
 ---
 title: CuTe 学习笔记（三）Layout Algebra（二）
-date: 2025-03-20 18:00:00
+date: 2025-03-21 18:00:00
 tags: [CUTLASS, CuTe, Layout, GPU]
-categories: [Cutlass 学习笔记]
+categories: [Cutlass 学习笔记, CuTe]
 mathjax: true
 description: 文章继续介绍 CuTe Layout Algebra 的具体的代数运算流程，包括 Division, Product, Inverse 操作。
 ---

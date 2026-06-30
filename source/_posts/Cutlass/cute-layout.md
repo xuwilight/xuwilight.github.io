@@ -2,7 +2,7 @@
 title: CuTe 学习笔记（一） Layout
 date: 2025-03-20 16:00:00
 tags: [CUTLASS, CuTe, Layout, GPU]
-categories: [Cutlass 学习笔记]
+categories: [Cutlass 学习笔记,CuTe]
 description: 文章介绍了 CuTe Layout 的核心概念，涵盖 Layout 的组成、Stride、Tile、Partition、Slice 等操作。
 mathjax: true
 ---
