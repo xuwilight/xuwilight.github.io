@@ -1,5 +1,5 @@
 ---
-title: CuTe 学习笔记（一） Layout
+title: CuTe 学习笔记（一）Layout
 date: 2025-03-20 16:00:00
 tags: [CUTLASS, CuTe, Layout, GPU]
 categories: [Cutlass 学习笔记,CuTe]
