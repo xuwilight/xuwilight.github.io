@@ -60,7 +60,7 @@ logical_divide(A, B) = $((2,2),(2,3)):((2,4),(1,8))$
 layout A 的形状如下：
 
 <div align="center">
-        <img src="/assets/cute-layout-algebra/divide1.png" width="100%" height="auto" alt="layout">
+        <img src="/assets/cute-layout-algebra/div1.png" width="50%" height="auto" alt="layout">
         <small>layout A 的形状</small>
 </div>
 <br>
@@ -68,7 +68,7 @@ layout A 的形状如下：
 layout B 的形状如下：
 
 <div align="center">
-        <img src="/assets/cute-layout-algebra/divide2.png" width="100%" height="auto" alt="layout">
+        <img src="/assets/cute-layout-algebra/div2.png" width="50%" height="auto" alt="layout">
         <small>layout B 的形状</small>
 </div>
 <br>
@@ -76,7 +76,7 @@ layout B 的形状如下：
 首先通过 composition 操作获取 layout A 中被 layout B 选中的元素的布局。如下图所示，可以看到被 B 选中的元素在 A 中并不连续。
 
 <div align="center">
-        <img src="/assets/cute-layout-algebra/divide3.png" width="100%" height="auto" alt="layout">
+        <img src="/assets/cute-layout-algebra/div3.png" width="80%" height="auto" alt="layout">
         <small></small>
 </div>
 <br>
@@ -86,7 +86,7 @@ layout B 的形状如下：
 这一步先计算 layout B 相对 layout A 的补集。如下图所示，layout A 被 layout B 分成 6 块，用不同的颜色表示。块与块之间的 layout 是 $(2,3):(1,8)$，也就是 layout B 的补集。有了补集后再与 A 进行组合。
 
 <div align="center">
-        <img src="/assets/cute-layout-algebra/divide4.png" width="100%" height="auto" alt="layout">
+        <img src="/assets/cute-layout-algebra/div4.png" width="100%" height="auto" alt="layout">
         <small></small>
 </div>
 <br>
@@ -94,7 +94,7 @@ layout B 的形状如下：
 将前面计算的结果进行拼接。把 layout B 对应元素的布局放在第一维，块与块的布局放在第二维得到最终的除法结果。从下图可以看到，通过 `logical_divide`，layout A 中的元素按照 layout B 分块的结果重新排列了。
 
 <div align="center">
-        <img src="/assets/cute-layout-algebra/divide5.png" width="100%" height="auto" alt="layout">
+        <img src="/assets/cute-layout-algebra/div5.png" width="50%" height="auto" alt="layout">
         <small></small>
 </div>
 <br>
@@ -121,7 +121,7 @@ A \oslash B &= (9,(4,8)):(59,(13,1)) \oslash \langle 3:3, (2,4):(1,8) \rangle \\
 通过 `logical_divide` 操作把相同的块对应的元素放到一起。由于是按维度计算的，所以在列方向上相同块中的三个元素按顺序排列到一起。行方向上相同块中的 8 个元素按顺序排列到一起，最终结果如下图所示。
 
 <div align="center">
-        <img src="/assets/cute-layout-algebra/divide6.png" width="100%" height="auto" alt="layout">
+        <img src="/assets/cute-layout-algebra/div6.png" width="100%" height="auto" alt="layout">
         <small></small>
 </div>
 <br>
@@ -159,7 +159,7 @@ $$((3,(2,4)),(3,(2,2))):((177,(13,2)),(59,(26,1)))$$
 `zipped_divide` 会变成下图的样子。可以看到，相同块的元素全部在同一维度中。
 
 <div align="center">
-        <img src="/assets/cute-layout-algebra/divide7.png" width="100%" height="auto" alt="layout">
+        <img src="/assets/cute-layout-algebra/div7.png" width="50%" height="auto" alt="layout">
         <small></small>
 </div>
 <br>
@@ -203,7 +203,7 @@ auto logical_product(Layout<LShape,LStride> const& layout,
 首先计算 A 在 size(A)*cosize(B) = 32 空间下的补集。通过上面补集的计算过程不难算出，A 的补集是 (2,4):(2,8)。
 
 <div align="center">
-        <img src="/assets/cute-layout-algebra/product2.png" width="40%" height="auto" alt="layout">
+        <img src="/assets/cute-layout-algebra/prod2.png" width="40%" height="auto" alt="layout">
         <small>A的补集</small>
 </div>
 <br>
@@ -211,16 +211,15 @@ auto logical_product(Layout<LShape,LStride> const& layout,
 此时 layout A 在 32 空间下的完整表示如下图。
 
 <div align="center">
-        <img src="/assets/cute-layout-algebra/product3.png" width="100%" height="auto" alt="layout">
+        <img src="/assets/cute-layout-algebra/prod3.png" width="60%" height="auto" alt="layout">
         <small></small>
 </div>
 <br>
 
-
 然后把补集按照 layout B 的布局排列。
 
 <div align="center">
-        <img src="/assets/cute-layout-algebra/product4.png" width="100%" height="auto" alt="layout">
+        <img src="/assets/cute-layout-algebra/prod4.png" width="60%" height="auto" alt="layout">
         <small></small>
 </div>
 <br>
@@ -228,7 +227,7 @@ auto logical_product(Layout<LShape,LStride> const& layout,
 与 layout A 进行组合得到最后结果。
 
 <div align="center">
-        <img src="/assets/cute-layout-algebra/product5.png" width="100%" height="auto" alt="layout">
+        <img src="/assets/cute-layout-algebra/prod5.png" width="60%" height="auto" alt="layout">
         <small></small>
 </div>
 <br>
@@ -250,7 +249,7 @@ A \otimes B &= ((2,5):(5,1)) \otimes \langle 3:5, 4:6 \rangle \\\\
 \end{equation*}
 
 <div align="center">
-        <img src="/assets/cute-layout-algebra/product6.png" width="100%" height="auto" alt="layout">
+        <img src="/assets/cute-layout-algebra/prod6.png" width="100%" height="auto" alt="layout">
         <small></small>
 </div>
 <br>
@@ -264,7 +263,7 @@ A \otimes B &= ((2,5):(5,1)) \otimes \langle 3:5, 4:6 \rangle \\\\
 `blocked_product` 的第二个参数是对 layout A 复制的数量。在下图中，第二个参数是 (3,4):(1,3)，代表把 layout A 在第一维复制 3 次，在第二维复制 4 次。使用这种方法可以更直观的理解两个 layout 相乘之后的结果。
 
 <div align="center">
-        <img src="/assets/cute-layout-algebra/product7.png" width="100%" height="auto" alt="layout">
+        <img src="/assets/cute-layout-algebra/prod7.png" width="100%" height="auto" alt="layout">
         <small></small>
 </div>
 <br>
@@ -272,7 +271,7 @@ A \otimes B &= ((2,5):(5,1)) \otimes \langle 3:5, 4:6 \rangle \\\\
 `raked_product` 的计算结果与 `blocked_product` 略有不同，他不是像 `blocked_product` 一样按照 (rowA, rowB),(colA, colB) 这种顺序组合的，而是按照 (rowB, rowA),(colB, colA) 进行组合的，计算结果如下图所示。
 
 <div align="center">
-        <img src="/assets/cute-layout-algebra/product8.png" width="100%" height="auto" alt="layout">
+        <img src="/assets/cute-layout-algebra/prod8.png" width="100%" height="auto" alt="layout">
         <small></small>
 </div>
 <br>
@@ -308,7 +307,7 @@ $$((2,5),(3,4)):((5,1),(10,30))$$
 下图是 `zipped_product` 的结果。可以看到，相同块的元素全部在同一维度中。
 
 <div align="center">
-        <img src="/assets/cute-layout-algebra/product9.png" width="100%" height="auto" alt="layout">
+        <img src="/assets/cute-layout-algebra/prod9.png" width="60%" height="auto" alt="layout">
         <small></small>
 </div>
 <br>
