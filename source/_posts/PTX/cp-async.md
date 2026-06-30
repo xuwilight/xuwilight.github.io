@@ -49,7 +49,7 @@ commit 操作会把前面所有还没有被提交的异步操作提交到一个 
 
 ## Mbarrier-based mechanism
 
-mbarrier 是一个在共享内存中的对象，详见 [mbarrier](../mbarrier/)。一个线程可以通过 mbarrier 的状态来确定一个或多个异步操作是否完成。当 mbarrier 的当前状态完成后，说明所有被当前状态跟踪的异步操作均已完成，并且所有参与 mbarrier 的线程可以访问异步操作的结果。
+mbarrier 是一个在共享内存中的对象，详见 [mbarrier](/2026/06/20/PTX/mbarrier/)。一个线程可以通过 mbarrier 的状态来确定一个或多个异步操作是否完成。当 mbarrier 的当前状态完成后，说明所有被当前状态跟踪的异步操作均已完成，并且所有参与 mbarrier 的线程可以访问异步操作的结果。
 
 使用流程如下：
 

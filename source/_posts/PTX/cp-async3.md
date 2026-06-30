@@ -418,7 +418,7 @@ int main()
 
 ## TMA Swizzle
 
-因为 TMA 是 global memory 和 shared memory 之间的内存拷贝，所以不可避免的会遇到 bank conflicts 的问题。关于 shared memory 和 bank conflicts 详见 [shared memory](../cute-swizzle)
+因为 TMA 是 global memory 和 shared memory 之间的内存拷贝，所以不可避免的会遇到 bank conflicts 的问题。关于 shared memory 和 bank conflicts 详见 [shared memory](/2025/03/22/Cutlass/cute-swizzle/)
 
 默认情况下，TMA 会按照数据在全局内存中的布局顺序将数据加载到共享内存中。但是，这种布局对于某些共享内存访问模式可能导致 bank conflict。为了提高性能并减少 bank conflict，TMA 支持使用 swizzle 来更改共享内存布局。
 
