@@ -1,8 +1,8 @@
 ---
-title: Cutlass SGEMM 代码分析
-date: 2025-08-15 12:00:00
-tags: [CUTLASS, SGEMM, GEMM, GPU]
-categories: [Cutlass 学习笔记]
+title: Cutlass 学习笔记（四）Cutlass SGEMM 代码分析
+date: 2025-08-18 12:00:00
+tags: [CUTLASS, SGEMM, GEMM]
+categories: [Cutlass 学习笔记,Cutlass]
 description: 介绍了 cutlass 中 sgemm的基本实现和计算流程。
 ---
 

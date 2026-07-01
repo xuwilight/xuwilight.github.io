@@ -1,8 +1,8 @@
 ---
-title: SM90 GEMM TMA WS PingPong
-date: 2025-08-15 12:00:00
+title: Cutlass 学习笔记（九）SM90 GEMM TMA WS PingPong
+date: 2025-08-23 12:00:00
 tags: [CUTLASS, GEMM, TMA, WarpSpecialized, PingPong, SM90, GPU]
-categories: [Cutlass 学习笔记]
+categories: [Cutlass 学习笔记,Cutlass]
 description: sm90_gemm_tma_ws_pingpong，大的来了 sm90_gemm_tma_ws_pingpong 和 sm90_gemm_tma_ws 的实现代码完全一样，只需要 using MmaSchedule = cutlass::gemm::KernelTmaWarpSpecializedPingpong;就行。
 ---
 

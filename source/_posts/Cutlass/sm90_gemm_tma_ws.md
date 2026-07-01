@@ -1,8 +1,8 @@
 ---
-title: SM90 GEMM TMA Warp Specialized
-date: 2025-08-15 12:00:00
+title: Cutlass 学习笔记（八）SM90 GEMM TMA Warp Specialized
+date: 2025-08-22 12:00:00
 tags: [CUTLASS, GEMM, TMA, WarpSpecialized, SM90, GPU]
-categories: [Cutlass 学习笔记]
+categories: [Cutlass 学习笔记,Cutlass]
 description: 使用 TMA 加载数据并通过 Warp Specialized 方式实现 GEMM，producer warp 负责加载数据，consumer warp 负责计算。
 ---
 

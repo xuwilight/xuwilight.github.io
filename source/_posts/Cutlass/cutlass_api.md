@@ -1,8 +1,8 @@
 ---
-title: Cutlass API
-date: 2025-08-15 12:00:00
-tags: [CUTLASS, API, GEMM]
-categories: [Cutlass 学习笔记]
+title: Cutlass 学习笔记（二）Cutlass API
+date: 2025-08-16 12:00:00
+tags: [CUTLASS]
+categories: [Cutlass 学习笔记,Cutlass]
 description: CUTLASS 为层次结构中每个级别的矩阵乘法累加运算提供了一个统一的编程模型。主要分为设备级（device-level）、线程块级（threadblock-level）、warp-level GEMM、thread-level GEMM 和指令级 GEMM。
 ---
 
