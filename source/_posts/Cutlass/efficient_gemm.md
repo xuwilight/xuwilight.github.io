@@ -1,8 +1,8 @@
 ---
-title: Efficient GEMM
-date: 2025-08-15 12:00:00
-tags: [CUTLASS, GEMM, GPU]
-categories: [Cutlass 学习笔记]
+title: Cutlass 学习笔记（五）Efficient GEMM
+date: 2025-08-19 12:00:00
+tags: [CUTLASS, GEMM]
+categories: [Cutlass 学习笔记,Cutlass]
 description: 深入解析 CUTLASS GEMM 的分层结构，从线程块级、warp 级到指令级的分块策略与并行编程模型。
 ---
 

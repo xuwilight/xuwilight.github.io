@@ -1,8 +1,8 @@
 ---
-title: Hopper Cluster
-date: 2025-08-15 12:00:00
+title: Cutlass 学习笔记（六）Hopper Cluster
+date: 2025-08-20 12:00:00
 tags: [CUTLASS, Hopper, Cluster, GPU]
-categories: [Cutlass 学习笔记]
+categories: [Cutlass 学习笔记,Cutlass]
 description: 在 Hopper 架构中，使用 cluster 和普通的代码有什么区别，cluster 不就是一个 threadblock 能访问相同 cluster 中其他 SM 上的 shared memory 吗，这有什么优势。而且通过 ncu 发现 distributed shared memory 这块没有数据传输，是不是说明虽然使用了 cluster，但是确并没有发生不同 sm 间的传输。还有 ...
 ---
 

@@ -1,8 +1,8 @@
 ---
-title: Cutlass 笔记（一）CUTLASS 与 CuTe
+title: Cutlass 学习笔记（一）CUTLASS 与 CuTe
 date: 2025-08-15 12:00:00
 tags: [CUTLASS, CuTe]
-categories: [Cutlass 学习笔记]
+categories: [Cutlass 学习笔记,Cutlass]
 description: CUTLASS 是 NVIDIA 推出的开源 CUDA 模板库，专注于高效实现 GPU 上的线性代数运算。本文涵盖 CUTLASS 概览、CuTe 核心概念、API 层级结构、Profiler 使用方法，以及头文件实现的原因分析。
 ---
 

@@ -1,8 +1,8 @@
 ---
-title: Cutlass API 3.x
-date: 2025-08-15 12:00:00
-tags: [CUTLASS, API, GEMM]
-categories: [Cutlass 学习笔记]
+title: Cutlass 学习笔记（三）Cutlass API 3.x
+date: 2025-08-17 12:00:00
+tags: [CUTLASS]
+categories: [Cutlass 学习笔记,Cutlass]
 description: cutlass 3.0 相比较之前的代码主要是多了 collective 和 cute。应该是为了更好的适配 Hopper 等最新的 GPU 框架。 CUTLASS 3.0 具有与以下级别对应的 GEMM API，按从高到低的顺序排列。 1. Device
 ---
 
