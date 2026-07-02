@@ -1,38 +1,44 @@
 ---
-title: mbarrier 异步屏障
-date: 2026-06-20 11:00:00
-tags: [CUDA, PTX, mbarrier, GPU, 异步同步]
+title: mbarrier 指令
+date: 2026-06-26 11:00:00
+tags: [CUDA, PTX, mbarrier]
 categories: [PTX 学习笔记]
-description: 深入解析 CUDA PTX mbarrier 异步屏障指令，涵盖 init、arrive、wait、expect_tx、complete_tx 等操作方法及 arrive_drop、test_wait、try_wait 等机制。
+description: 文章介绍了 CUDA PTX mbarrier 异步屏障指令的设计原理和使用方法，涵盖 init、arrive、wait、expect_tx、complete_tx 等操作方法及 arrive_drop、test_wait、try_wait 等机制。
 ---
 
 # Asynchronous Barriers
 
 barrier 是一种用于线程同步的方法。一般 thread block 中线程的同步是通过 `__syncthreads()` 进行的。一个线程运行到 `__syncthreads()` 时必须要等待其他线程到达才能执行后续代码，在等待时线程不能干别的事情。
 
-barrier 同步等于是通过 `barrier.arrive()` 和 `barrier.wait()` 把 `__syncthreads()` 拆开了。线程到达 arrive 后可以干别的独立的事情，干完之后再通过 wait 确保与其他线程的同步。
+barrier 同步等于是通过 `barrier.arrive()` 和 `barrier.wait()` 把 `__syncthreads()` 拆开了。线程执行 arrive 后可以干别的独立的事情，干完之后再通过 wait 确保与其他线程的同步。
 
 ![barrier](/assets/mbarrier/barrier.png "barrier")
 
-在 PTX 中有多种 barrier 指令，如 `bar`，`barrier` 和 `mbarrier` 等。
+在 PTX 中有多种 barrier 指令，如 `bar`、`barrier` 和 `mbarrier` 等。
 
 本文中主要介绍 `mbarrier`。
 
-mbarrier 是一个共享内存上的 64 位变量，由 expected_arrival_count，transcation_count，arrival_count 和 phase 组成，函数有 arrive 和 wait。
-其中 expected_arrival_count 表示有多少线程会参与到 mbarrier 中，这个值由用户提供。transcation_count 是一个可选的变量，在 Hopper 的异步拷贝中可以用到。
+mbarrier 是一个共享内存上的 64 位变量，由 expected_arrival_count、transaction_count、arrival_count 和 phase 组成，函数有 arrive 和 wait。
 
-mbarrier 在初始化时会根据用户提供的 value 初始化 expected_arrival_count，然后把 arrival_count 也初始化成这个 value。phase 设成 0。transcation_count 如果有的话是根据异步拷贝的数据量设置的。
+其中 expected_arrival_count 表示有多少线程会参与到 mbarrier 中，这个值由用户提供。transaction_count 是一个可选的变量，在 TMA 的异步拷贝中可以用到。
 
-当一个线程到达 arrive 函数后，arrival_count 会减 1，表示已经有一个线程到达了。当所有的参与线程都到达了 arrive 函数，arrival_count 就会变成 0。当 arrival_count 变成 0 时，表示所有的线程都到达了，此时 phase 状态会切换，arrival_count 会重新被设置为 expected_arrival_count。
-如果设置了 transcation_count 则 mbarrier 会等待 transcation_count 和 arrival_count 同时归零后切换 phase。
+mbarrier 在初始化时会根据用户提供的 value 初始化 expected_arrival_count，然后把 arrival_count 设置为 -value，表示当前还需要等待多少线程到达。phase 初始化为 0。transaction_count 是可选的，如果有的话是根据异步拷贝的数据量设置的。
 
-如果其他线程还没到达 arrive，当前线程会在 wait 函数进行等待。wait 函数有两种判断同步是否完成方法，一种是使用 token 判断，一种是使用奇偶校验判断。如果使用第一种方法，我们需要让 arrive 函数返回一个 token，这个 token 记录着当前 mbarrier 的状态，然后 wait 通过 token 判断当前阶段同步是否完成。
-如果使用第二种方法，我们需要定义一个临时的变量，通过将临时变量与 mbarrier 中的 phase 进行奇偶校验来判断同步是否完成。
+当一个线程执行 arrive 函数后，arrival_count 会加 1，表示已经有一个线程到达了。当所有的参与线程都到达了 arrive 函数，arrival_count 就会变成 0，此时 phase 状态会切换，arrival_count 会重新被设置为 -value。
 
-在 mbarrier 同步中，所有的线程到达 arrive 后 mbarrier 的状态已经切换了，然后每个线程各干各的，到达 wait 就直接返回为 true。
-如果部分线程先到达 arrive，此时状态没切换，然后这部分线程到达了 wait，就一直在等待。等到其他线程到达 arrive，且状态切换后 wait 就等待完成。
+如果设置了 transaction_count 则 mbarrier 会等待 transaction_count 和 arrival_count 同时归零后切换 phase。如果其他线程还没到达 arrive，当前线程会在 wait 函数进行等待。
 
-需要注意的是 mbarrier 只需要一个线程就可以初始化，如果多个线程进行初始化，transcation_count 会进行累加。
+wait 函数有两种判断同步是否完成方法，一种是使用 token 判断，一种是使用奇偶校验判断。
+
+如果使用第一种方法，我们需要让 arrive 函数返回一个 token，这个 token 记录着当前 mbarrier 的状态，然后 wait 通过 token 判断当前阶段同步是否完成。如果使用第二种方法，我们需要定义一个临时的变量，通过将临时变量与 mbarrier 中的 phase 进行奇偶校验来判断同步是否完成，如果 phase 相同就会阻塞，phase 不同就会通过。
+
+在 mbarrier 同步中，所有的线程到达 arrive 后 mbarrier 的状态已经切换了，然后每个线程各干各的，到达 wait 就直接返回为 true。如果部分线程先到达 arrive，此时状态没切换，然后这部分线程到达了 wait，就一直在等待，等到其他线程到达 arrive，且状态切换后 wait 就等待完成。
+
+需要注意的是 mbarrier 只需要一个线程就可以初始化，如果多个线程进行初始化，transaction_count 会进行累加。
+
+下图是 mbarrier 的基本功能和用法。
+
+> 图中初始化时 arrival_count 设置是正数，然后执行 arrive 后 arrival_count 减去 1。但是根据有些文章对 mbarrier 内部状态的分析，初始化内存中实际设置的是负数，线程到达后应该是 -arrival_count += 1。不过内部实现细节并不重要，只需要知道 mbarrier 的状态是怎么切换的就行。
 
 ![barrier_details](/assets/mbarrier/barrier_details.png "barrier1")
 
@@ -40,16 +46,17 @@ mbarrier 在初始化时会根据用户提供的 value 初始化 expected_arriva
 
 ## mbarrier
 
-mbarrier 是创建在共享内存中的对象，支持以下功能：
+mbarrier 是创建在共享内存中的不透明的对象，支持以下功能：
 
 1. 在 CTA (thread block) 内对线程或线程子集进行同步。
 2. 在 CTA cluster 中对线程执行单向同步操作。线程只能对位于 shared::cluster 空间的 mbarrier 执行 arrive 操作，不能执行 *_wait 操作。
 3. 等待线程发起的异步内存操作完成，并使其对其他线程可见。
 
 mbarrier 可以通过 mbarrier.init 进行初始化，也可以通过 mbarrier.inval 设置为无效。
+
 mbarrier 支持下面的操作，在调用这些方法前，必须要先对 mbarrier 进行初始化。
 
-```cpp
+```log
 mbarrier.expect_tx
 mbarrier.complete_tx
 mbarrier.arrive
@@ -61,9 +68,11 @@ cp.async.mbarrier.arrive
 ```
 
 与 bar 或 barrier 指令（每个 CTA 只能访问有限数量的 barriers）不同，mbarrier 对象由用户定义，仅受到可用的共享内存总大小的限制。
+
 通过 mbarrier，线程可以在到达 arrive 后进行其他的工作，然后通过 wait 对之前的工作进行同步。
 
 mbarrier 是一个 64 位的共享内存变量，需要 8 字节对齐。
+
 mbarrier 对象中包含下面的信息：
 
 1. 当前 mbarrier 的状态 phase。
@@ -83,7 +92,9 @@ mbarrier 对象中包含下面的信息：
 
 在 mbarrier 初始化阶段，会根据用户提供的值对上面三个变量进行初始化。其中设置 tx-count 的操作又被称为 `expect-tx` 操作。`expect-tx` 操作用来指定异步传输的数据量，带有一个 expectCount 参数，它会将 mbarrier 的 tx-count 增加 expectCount 指定的值。
 
-tx-count 默认是 0，只有在 Hopper 架构上进行异步传输时才需要设置 tx-count，mbarrier 的 tx-count 需要设置为当前阶段要跟踪的异步内存操作总 bytes 数。每个异步操作完成后，都会对 mbarrier 对象执行 `complete-tx` 操作。`complete-tx` 操作也带有一个completeCount参数，会把 tx-count 减去 completeCount，用来表示当前异步数据传输已经完成。
+tx-count 默认是 0，只有使用 TMA 进行异步传输时才需要设置 tx-count。
+
+mbarrier 的 tx-count 需要设置为当前阶段要跟踪的异步内存操作总 bytes 数。每个异步操作完成后，都会对 mbarrier 对象执行 `complete-tx` 操作。`complete-tx` 操作也带有一个 completeCount 参数，会把 tx-count 减去 completeCount，用来表示当前异步数据传输已经完成。
 
 mbarrier 的 phase 记录了 mbarrier 已经进行了几次同步操作。在每一个 phase 中，threads 首先通过 `arrive-on` 操作来完成当前 phase，然后通过 test_wait 或 try_wait 等待其他线程完成当前阶段。一旦当前阶段完成，mbarrier 会自动重新初始化来用于下一个阶段。
 
@@ -114,6 +125,7 @@ mbarrier.init{.shared{::cta}}.b64 [addr], count;
 ```
 
 mbarrier.init 使用无符号 32 位整数 count 在 addr 指定的位置初始化 mbarrier 对象。操作数 count 的值必须在 1 - 2<sup>20</sup>-1 之间。
+
 mbarrier 对象的初始化包括：
 
 1. 把 current phase 设为 0。
@@ -121,8 +133,8 @@ mbarrier 对象的初始化包括：
 3. 把 pending arrival count 设为 count。
 4. 把 tx-count 设为 0。tx-count 是异步拷贝时传输的 bytes 数，只有在异步拷贝时才用到，默认是 0。
 
-addr 对象需要 64 位，8 字节对齐。
-在包含有效 mbarrier 对象的内存位置上执行 mbarrier.init 操作的行为是未定义的；首先使用 mbarrier.inval 使 mbarrier 对象无效，然后才能使用对应的内存位置。
+addr 对象需要 64 位，8 字节对齐。在包含有效 mbarrier 对象的内存位置上执行 mbarrier.init 操作的行为是未定义的；首先使用 mbarrier.inval 使 mbarrier 对象无效，然后才能使用对应的内存位置。
+
 举例：
 
 ```cpp
@@ -169,12 +181,12 @@ mbarrier.inval{.shared{::cta}}.b64 [addr];
 ```
 
 mbarrier.inval 会使 addr 指定位置的 mbarrier 对象失效。在将 mbarrier 对象的内存位置用于任何其他用途之前，必须先使其失效。
+
 在不包含有效 mbarrier 对象的内存位置执行除 mbarrier.init 之外的任何 mbarrier 操作都会导致未定义的行为。
 
 ## mbarrier.expect_tx
 
-对 mbarrier 对象执行 expect-tx 操作。expect-tx 操作就是把 mbarrier 中的 tx-count 增加 txCount。
-tx-count 是一个 phase 中异步拷贝传输的数据量。
+对 mbarrier 对象执行 expect-tx 操作。expect-tx 操作就是把 mbarrier 中的 tx-count 增加 txCount。tx-count 是一个 phase 中异步拷贝传输的数据量。
 
 ```cpp
 mbarrier.expect_tx{.sem}{.scope}{.space}.b64 [addr], txCount;
@@ -184,7 +196,7 @@ mbarrier.expect_tx{.sem}{.scope}{.space}.b64 [addr], txCount;
 .space = { .shared{::cta}, .shared::cluster }
 ```
 
-执行 mbarrier.expect_tx 的线程对地址 addr 指定位置的 mbarrier 对象执行 expect-tx 操作。txCount 是 32 位无符号整数操作数， 也就是 expect-tx 操作的 expectCount 参数。
+执行 mbarrier.expect_tx 的线程对地址 addr 指定位置的 mbarrier 对象执行 expect-tx 操作。txCount 是 32 位无符号整数操作数，也就是 expect-tx 操作的 expectCount 参数。
 
 ```cpp
 mbarrier.expect_tx.b64                       [addr], 32;
@@ -228,6 +240,7 @@ mbarrier.complete_tx{.sem}{.scope}{.space}.b64 [addr], txCount;
 ```
 
 执行 mbarrier.complete_tx 的线程在地址 addr 指定的位置对 mbarrier 对象执行 complete-tx 操作。txCount 是 32 位无符号整数操作数，也就是 complete-tx 操作的 completeCount 参数。
+
 mbarrier.complete_tx 不涉及任何异步内存操作，仅模拟异步内存操作的完成及其向 mbarrier 对象发出信号。
 
 ```cpp
@@ -238,7 +251,9 @@ mbarrier.complete_tx.relaxed.cta.b64 [addr2],    32;
 
 ## mbarrier.arrive
 
-在 mbarrier 对象上执行 arrive-on 操作。arrive-on 操作就是当某个线程执行 arrive 时，就把 mbarrier 中的 pending arrival count 数减去 count，没有设置 count 的话默认减去 1。pending arrival count 为 0 就执行切换 phase 操作。
+在 mbarrier 对象上执行 arrive-on 操作。
+
+arrive-on 操作就是当某个线程执行 arrive 时，就把 mbarrier 中的 pending arrival count 数减去 count，没有设置 count 的话默认减去 1。pending arrival count 为 0 就执行切换 phase 操作。
 
 ```cpp
 mbarrier.arrive{.sem}{.scope}{.shared{::cta}}.b64           state, [addr]{, count};
@@ -252,13 +267,14 @@ mbarrier.arrive.noComplete{.release}{.cta}{.shared{::cta}}.b64  state, [addr], c
 ```
 
 执行 mbarrier.arrive 的线程对位于地址 addr 指定位置的 mbarrier 对象执行 arrive-on 操作。
+
 可选限定符 .expect_tx 指定在 arrive-on 操作之前执行 expect-tx 操作。也就是先加上 tx-count 的数量，然后再执行 arrive 的操作。
+
 当同时指定限定符 .arrive 和 .expect_tx 时，则 arrive-on 操作的 count 参数假定为 1。
 
-对位于 .shared::cta 中的 mbarrier 对象执行 mbarrier.arrive 操作会返回一个 64 位寄存器 state，用于捕获 arrive-on 操作之前 mbarrier 对象的 phase 到 state 中。state的内容与具体实现相关。也可以使用下划线 "\_" 作为 state 参数。
+对位于 .shared::cta 中的 mbarrier 对象执行 mbarrier.arrive 操作会返回一个 64 位寄存器 state，用于捕获 arrive-on 操作之前 mbarrier 对象的 phase 到 state 中。state 的内容与具体实现相关。也可以使用下划线 "\_" 作为 state 参数。
 
-带有 .noComplete 限定符的 mbarrier.arrive 操作不得导致 mbarrier 完成其当前阶段，否则行为未定义。
-注意：对于 sm_8x，当指定参数数量时，需要修饰符 .noComplete。
+带有 .noComplete 限定符的 mbarrier.arrive 操作不得导致 mbarrier 完成其当前阶段，否则行为未定义。注意：对于 sm_8x，当指定参数数量时，需要修饰符 .noComplete。
 
 ```cpp
 .reg .b32 cnt, remoteAddr32, remoteCTAId, addr32;
@@ -281,6 +297,7 @@ mbarrier.arrive.noComplete.b64                   %r1, [addr], 2;
 mbarrier.arrive.relaxed.cta.b64                  %r2, [addr], 4;
 mbarrier.arrive.b64                              %r2, [addr], cnt;
 ```
+
 ```cpp
 int num_bytes = blockDim.x * sizeof(float);
 asm volatile("mbarrier.arrive.expect_tx.shared::cta.b64 _, [%1], %0; \n\t" ::"r"(num_bytes), "r"(mbar_int_ptr));
@@ -308,7 +325,9 @@ mbarrier.arrive_drop.noComplete{.release}{.cta}{.shared{::cta}}.b64 state,  [add
 
 1. 将 mbarrier 对象的预期到达计数 expected count 减去 count 指定的值。如果未指定 count 操作数，则默认为 1。
 2. 对 mbarrier 对象执行 arrive-on 操作。
+
 mbarrier 对象预期到达计数的减少将适用于 mbarrier 对象的所有后续阶段。
+
 其余详见 mbarrier.arrive。
 
 ```cpp
@@ -342,7 +361,8 @@ cp.async.mbarrier.arrive{.noinc}{.shared{::cta}}.b64 [addr];
 ```
 
 执行线程发起的所有先前 cp.async 操作完成后，系统会在 mbarrier 对象上触发一个 arrive-on 操作。mbarrier 对象位于 addr 指定的位置。arrive-on 操作与 cp.async.mbarrier.arrive 的执行异步。
-如果未指定 .noinc 修饰符，则 mbarrier 对象的待处理计数会在异步 arrive-on 操作之前增加 1。这会导致当前阶段异步 arrive-on 操作的待处理计数发生零和变化 zero-net change。也就是 arrive-on 前增加1，arrive-on 后减去1，所以变为0，即异步 arrive 不影响 pending count。
+
+如果未指定 .noinc 修饰符，则 mbarrier 对象的待处理计数会在异步 arrive-on 操作之前增加 1。这会导致当前阶段异步 arrive-on 操作的待处理计数发生零和变化 zero-net change。也就是 arrive-on 前增加 1，arrive-on 后减去 1，所以变为 0，即异步 arrive 不影响 pending count。
 
 当指定 .noinc 修饰符时，mbarrier 对象的待处理计数不会递增。因此，需要在 mbarrier 对象的初始化过程中就考虑到异步到达操作导致的待处理计数减少。
 
@@ -400,7 +420,7 @@ mbarrier.test_wait.shared.b64 p, [shMem], state;
 @!p bra waitLoop;
 ```
 
-在上面的代码中例1没有用 .noinc，所以mbarrier初始化时只需要设置成 mbarrier.arrive 需要的数量就行。例2中使用了 .noinc，所以初始化时还要加上每个线程异步拷贝 arrive 的数量。
+在上面的代码中例 1 没有用 .noinc，所以 mbarrier 初始化时只需要设置成 mbarrier.arrive 需要的数量就行。例 2 中使用了 .noinc，所以初始化时还要加上每个线程异步拷贝 arrive 的数量。
 
 ## mbarrier.test_wait, mbarrier.try_wait
 
@@ -423,6 +443,7 @@ mbarrier.try_wait.parity{.sem}{.scope}{.shared{::cta}}.b64  waitComplete, [addr]
 test_wait 和 try_wait 操作测试 addr 指定位置的 mbarrier 对象当前 phase 或前一 phase 是否完成。
 
 mbarrier.test_wait 是一条非阻塞指令，用于测试 phase 是否完成。
+
 mbarrier.try_wait 是一条潜在阻塞指令，用于测试 phase 是否完成。如果 phase 未完成，则正在执行的线程可能会被暂停。被暂停的线程将在指定 phase 完成时，或在 phase 完成之前，按照系统相关的时间限制恢复执行。可选的 32 位无符号整数 suspendTimeHint 指定时间限制（以纳秒为单位），可用于替代系统相关的时间限制。
 
 mbarrier.test_wait 和 mbarrier.try_wait 有两种方法测试 phase 是否完成：
@@ -580,7 +601,9 @@ mbarrier.pending_count.b64 count, state;
 ```
 
 可以使用 mbarrier.pending_count 从 mbarrier state 中查询待处理计数。
+
 state 操作数是一个 64 位寄存器，必须是先前执行 mbarrier.arrive.noComplete 或 mbarrier.arrive_drop.noComplete 指令的结果。否则，行为未定义。
+
 目标寄存器 count 是一个 32 位无符号整数，表示在执行获取 state 寄存器的 arrive-on 操作之前 mbarrier 对象的待处理计数。
 
 ```cpp
@@ -591,3 +614,4 @@ state 操作数是一个 64 位寄存器，必须是先前执行 mbarrier.arrive
 mbarrier.arrive.noComplete.b64 state, [shMem], 1;
 mbarrier.pending_count.b64 %r1, state;
 ```
+
