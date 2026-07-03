@@ -1,6 +1,6 @@
 ---
 title: wgmma 指令
-date: 2026-06-16 13:00:00
+date: 2026-05-16 13:00:00
 tags: [CUDA, PTX, wgmma, Tensor Core, Hopper]
 categories: [PTX 学习笔记]
 description: 深入解析 CUDA PTX wgmma 异步 Warpgroup 级别矩阵乘加指令，涵盖 Swizzle 模式、描述符设置、m64n32k16 多场景示例及附录分析。
