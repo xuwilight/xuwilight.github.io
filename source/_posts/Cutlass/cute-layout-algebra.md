@@ -1,7 +1,7 @@
 ---
 title: CuTe 学习笔记（二）Layout Algebra（一）
 date: 2025-03-21 17:00:00
-tags: [CUTLASS, CuTe, Layout, GPU]
+tags: [CUTLASS, CuTe, Layout]
 categories: [Cutlass 学习笔记, CuTe]
 mathjax: true
 description: 文章介绍 CuTe Layout Algebra 的核心概念和具体的代数运算流程，包括 Flatten、Coalesce、Composition、Complement 操作。

@@ -1,7 +1,7 @@
 ---
 title: CuTe 学习笔记（九）SGEMM-01
 date: 2025-04-06 18:00:00
-tags: [CUTLASS, SGEMM, GEMM, GPU]
+tags: [CUTLASS, GEMM]
 categories: [Cutlass 学习笔记]
 description: cutlass-v4.1 这是一个最基础的 gemm 版本。 矩阵乘的规模 M = N = 5120，K = 4096。 数据类型全是 float，矩阵 A 选择 row-major，矩阵 B 选择 column-major。 直接进入 gemm_tn。
 ---

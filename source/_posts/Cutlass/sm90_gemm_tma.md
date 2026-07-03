@@ -1,7 +1,7 @@
 ---
 title: Cutlass 学习笔记（七）SM90 GEMM TMA
 date: 2025-08-21 12:00:00
-tags: [CUTLASS, GEMM, TMA, SM90, GPU]
+tags: [CUTLASS, GEMM, TMA, SM90]
 categories: [Cutlass 学习笔记,Cutlass]
 description: sm90_gemm_tma 函数使用 tma 异步加载数据，是一个 multistage 函数。 代码如下所示，基本功能是使用 tma 加载数据，使用 wgmma 进行计算。没有进行 warp specification，也不是 persistent kernel。只是在一个 threadblock 中对不同的 blockK 的加载和计算进行 overlap。
 ---

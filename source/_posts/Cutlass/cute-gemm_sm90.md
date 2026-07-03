@@ -1,7 +1,7 @@
 ---
 title: CuTe 学习笔记（十二）GEMM SM90
 date: 2025-04-22 18:00:00
-tags: [CUTLASS, GEMM, SM90, GPU]
+tags: [CUTLASS, GEMM]
 categories: [Cutlass 学习笔记]
 description: SM90 架构下使用 wgmma 指令实现 GEMM 矩阵乘法，分析 gemm_tn 的完整实现流程。
 ---

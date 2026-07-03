@@ -1,7 +1,7 @@
 ---
 title: CuTe 学习笔记（七）CuTe tiledMMA
 date: 2025-03-25 18:00:00
-tags: [CUTLASS, CuTe, MMA, GPU]
+tags: [CUTLASS, CuTe, MMA]
 categories: [Cutlass 学习笔记, CuTe]
 description: 深入解析 CuTe tiledMMA 机制，涵盖 TiledMMA 的创建、ThrMMA、partition 操作及 warpgroup 级别 MMA 的实现方式。
 published: true
