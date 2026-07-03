@@ -1,7 +1,7 @@
 ---
 title: wgmma 矩阵描述符
-date: 2026-06-20 14:00:00
-tags: [CUDA, PTX, wgmma, GPU, Tensor Core, Hopper, Swizzle]
+date: 2026-06-15 14:00:00
+tags: [CUDA, PTX, wgmma, Tensor Core, Hopper, Swizzle]
 categories: [PTX 学习笔记]
 description: 深入解析 wgmma 矩阵描述符结构，涵盖 K-Major 和 MN-Major 下不同 Swizzle 模式的 LBO/SBO 确定方式及 cutlass make_gemm_desc 实现原理。
 ---
@@ -11,7 +11,7 @@ description: 深入解析 wgmma 矩阵描述符结构，涵盖 K-Major 和 MN-Ma
 当 wgmma 从共享内存中加载数据时，需要设置一个 64 位的矩阵描述符用来描述数据在共享内存中的组织形式。具体结构如下：
 
 <div align="center">
-    <img src="/assets/wgmma-descriptor/wgmma_desc.png" width="80%" height="auto" alt="desc"><br>
+    <img src="/assets/wgmma-descriptor/wgmma_desc.png" width="100%" height="auto" alt="desc"><br>
     <small>matrix descriptor</small>
 </div>
 <br>
@@ -30,7 +30,7 @@ cutlass 中对应的代码如下。
     uint16_t leading_byte_offset_ : 14, : 2;  // 14 bits [0,14), 2 bits unused
     // stride dimension byte offset, bit [32,46), 4LSB not included
     // For N: This is the stride from the first 8 rows to the next 8 rows.
-    // For T: This is the stride fro mthe first 8 cols to the next 8 cols.
+    // For T: This is the stride from the first 8 cols to the next 8 cols.
     uint16_t stride_byte_offset_ : 14, : 2;   // 14 bits [0,14), 2 bits unused
     // base_offset, bit [49,52)
     // Valid only for SWIZZLE_128B and SWIZZLE_64B
@@ -88,7 +88,7 @@ Layout_K_SW128_Atom = Sw<3,4,3> o smem_ptr[32b](unset) o (_8,_64):(_64,_1)
 - 128bit：Layout: (_8,_1):(_1,_1)
 
 <div align="center">
-    <img src="/assets/wgmma-descriptor/Layout_K_INTER_Atom_128bit.png" width="6%" height="auto" alt="swizzle"><br>
+    <img src="/assets/wgmma-descriptor/Layout_K_INTER_Atom_128bit.png" width="10%" height="auto" alt="swizzle"><br>
     <small>Layout_K_INTER_Atom_128bit</small>
 </div>
 <br>
@@ -96,7 +96,7 @@ Layout_K_SW128_Atom = Sw<3,4,3> o smem_ptr[32b](unset) o (_8,_64):(_64,_1)
 - half：Layout: (_8,_8):(_8,_1)
 
 <div align="center">
-    <img src="/assets/wgmma-descriptor/Layout_K_INTER_Atom_half.png" width="28%" height="auto" alt="swizzle"><br>
+    <img src="/assets/wgmma-descriptor/Layout_K_INTER_Atom_half.png" width="35%" height="auto" alt="swizzle"><br>
     <small>Layout_K_INTER_Atom_half</small>
 </div>
 <br>
@@ -106,7 +106,7 @@ Layout_K_SW128_Atom = Sw<3,4,3> o smem_ptr[32b](unset) o (_8,_64):(_64,_1)
 - 128bit：Sw<1,0,3> o _0 o (_8,_2):(_2,_1)
 
 <div align="center">
-    <img src="/assets/wgmma-descriptor/Layout_K_SW32_Atom_128bit.png" width="8%" height="auto" alt="swizzle"><br>
+    <img src="/assets/wgmma-descriptor/Layout_K_SW32_Atom_128bit.png" width="10%" height="auto" alt="swizzle"><br>
     <small>Layout_K_SW32_Atom_128bit</small>
 </div>
 <br>
@@ -114,7 +114,7 @@ Layout_K_SW128_Atom = Sw<3,4,3> o smem_ptr[32b](unset) o (_8,_64):(_64,_1)
 - half：Layout: Sw<1,3,3> o _0 o (_8,_16):(_16,_1)
 
 <div align="center">
-    <img src="/assets/wgmma-descriptor/Layout_K_SW32_Atom_half.png" width="45%" height="auto" alt="swizzle"><br>
+    <img src="/assets/wgmma-descriptor/Layout_K_SW32_Atom_half.png" width="50%" height="auto" alt="swizzle"><br>
     <small>Layout_K_SW32_Atom_half</small>
 </div>
 <br>
@@ -124,7 +124,7 @@ Layout_K_SW128_Atom = Sw<3,4,3> o smem_ptr[32b](unset) o (_8,_64):(_64,_1)
 - 128bit：Layout: Sw<2,0,3> o _0 o (_8,_4):(_4,_1)
 
 <div align="center">
-    <img src="/assets/wgmma-descriptor/Layout_K_SW64_Atom_128bit.png" width="15%" height="auto" alt="swizzle"><br>
+    <img src="/assets/wgmma-descriptor/Layout_K_SW64_Atom_128bit.png" width="20%" height="auto" alt="swizzle"><br>
     <small>Layout_K_SW64_Atom_128bit</small>
 </div>
 <br>
@@ -132,7 +132,7 @@ Layout_K_SW128_Atom = Sw<3,4,3> o smem_ptr[32b](unset) o (_8,_64):(_64,_1)
 - half：Layout: Sw<2,3,3> o _0 o (_8,_32):(_32,_1)
 
 <div align="center">
-    <img src="/assets/wgmma-descriptor/Layout_K_SW64_Atom_half.png" width="75%" height="auto" alt="swizzle"><br>
+    <img src="/assets/wgmma-descriptor/Layout_K_SW64_Atom_half.png" width="80%" height="auto" alt="swizzle"><br>
     <small>Layout_K_SW64_Atom_half</small>
 </div>
 <br>
@@ -142,7 +142,7 @@ Layout_K_SW128_Atom = Sw<3,4,3> o smem_ptr[32b](unset) o (_8,_64):(_64,_1)
 - 128bit：Layout: Sw<3,0,3> o _0 o (_8,_8):(_8,_1)
 
 <div align="center">
-    <img src="/assets/wgmma-descriptor/Layout_K_SW128_Atom_128bit.png" width="25%" height="auto" alt="swizzle"><br>
+    <img src="/assets/wgmma-descriptor/Layout_K_SW128_Atom_128bit.png" width="30%" height="auto" alt="swizzle"><br>
     <small>Layout_K_SW128_Atom_128bit</small>
 </div>
 <br>
@@ -172,7 +172,7 @@ print_latex(sA1);print("\n");
 ```
 
 <div align="center">
-    <img src="/assets/wgmma-descriptor/128B_swizzle_k_12_tiling.png" width="50%" height="auto" alt="swizzle"><br>
+    <img src="/assets/wgmma-descriptor/128B_swizzle_k_12_tiling.png" width="70%" height="auto" alt="swizzle"><br>
     <small>k-major 128B swizzle column tiling</small>
 </div>
 <br>
@@ -186,7 +186,7 @@ print_latex(sA1);print("\n");
 ```
 
 <div align="center">
-    <img src="/assets/wgmma-descriptor/128B_swizzle_k_21_tiling.png" width="50%" height="auto" alt="swizzle"><br>
+    <img src="/assets/wgmma-descriptor/128B_swizzle_k_21_tiling.png" width="70%" height="auto" alt="swizzle"><br>
     <small>k-major 128B swizzle row tiling</small>
 </div>
 <br>
@@ -357,7 +357,7 @@ none swizzle 对 128×64 smem 的 tiling 结果如下图所示，图片中已经
 上面是 cutlass 中程序化的计算流程。其实可以根据 tiling 的结果直接看出来 SBO 和 LBO 的大小。因为 LBO 是 swizzle pattern 在主序方向上的 offset，这里就是 K 方向，SBO 是 swizzle pattern 在非主序方向上的 offset，这里就是 M 方向。所以可以直接从图中看到 SBO = 8，LBO = 128。
 
 <div align="center">
-    <img src="/assets/wgmma-descriptor/none_sw_desc.png" width="24%" height="auto" alt="swizzle"><br>
+    <img src="/assets/wgmma-descriptor/none_sw_desc.png" width="40%" height="auto" alt="swizzle"><br>
     <small>k-major none swizzle tiling 128×64</small>
 </div>
 <br>
@@ -453,7 +453,7 @@ stride_00 = 2。stride_10 = 1。stride_01 = 16。
 因为 LBO 是 swizzle pattern 在主序方向上的 offset，也就是 K 方向，SBO 是 swizzle pattern 在非主序方向上的 offset，也就是 M 方向。从图中也可以直接看到 SBO = 16，LBO = 1。这里是因为 wgmma 的 K 维度大小固定是 16，也就是 2 个 128bit 大小。在 wgmma 的范围内 K 方向的 stride = 1。
 
 <div align="center">
-    <img src="/assets/wgmma-descriptor/32BSW_desc.png" width="24%" height="auto" alt="swizzle"><br>
+    <img src="/assets/wgmma-descriptor/32BSW_desc.png" width="40%" height="auto" alt="swizzle"><br>
     <small>k-major 32B swizzle tiling 128×64</small>
 </div>
 <br>
@@ -546,7 +546,7 @@ stride_00 = 4。stride_10 = 1。stride_01 = 32。
 因为 LBO 是 swizzle pattern 在主序方向上的 offset，也就是 K 方向，SBO 是 swizzle pattern 在非主序方向上的 offset，也就是 M 方向。从图中也可以直接看到 SBO = 32，LBO = 1。
 
 <div align="center">
-    <img src="/assets/wgmma-descriptor/64BSW_desc.png" width="24%" height="auto" alt="swizzle"><br>
+    <img src="/assets/wgmma-descriptor/64BSW_desc.png" width="40%" height="auto" alt="swizzle"><br>
     <small>k-major 64B swizzle tiling 128×64</small>
 </div>
 <br>
@@ -641,7 +641,7 @@ recast 为 128bit 后变成 `Sw<3,4,3>_smem_ptr128b o (_64,_2):(_8,_1)`。
 因为 LBO 是 swizzle pattern 在主序方向上的 offset，也就是 K 方向，SBO 是 swizzle pattern 在非主序方向上的 offset，也就是 M 方向。从图中也可以直接看到 SBO = 64，LBO = 1。这里 LBO = 1 是因为 wgmma 的 K 维度大小固定是 16，也就是 2 个 128bit 大小。在 wgmma 的范围内 K 方向的 stride = 1。
 
 <div align="center">
-    <img src="/assets/wgmma-descriptor/128BSW_desc.png" width="24%" height="auto" alt="swizzle"><br>
+    <img src="/assets/wgmma-descriptor/128BSW_desc.png" width="40%" height="auto" alt="swizzle"><br>
     <small>k-major 128B swizzle tiling 128×64</small>
 </div>
 <br>
@@ -732,10 +732,10 @@ using Layout_MN_SW32_Atom  = decltype(upcast<sizeof_bits<Type>::value>(Layout_MN
 using Layout_MN_SW64_Atom  = decltype(upcast<sizeof_bits<Type>::value>(Layout_MN_SW64_Atom_Bits{}));
 using Layout_MN_SW128_Atom = decltype(upcast<sizeof_bits<Type>::value>(Layout_MN_SW128_Atom_Bits{}));
 
-Layout_K_INTER_Atom = Sw<0,4,3> o smem_ptr[32b](unset) o (_8,_8):(_8,_1)
-Layout_K_SW32_Atom  = Sw<1,4,3> o smem_ptr[32b](unset) o (_8,_16):(_16,_1)
-Layout_K_SW64_Atom  = Sw<2,4,3> o smem_ptr[32b](unset) o (_8,_32):(_32,_1)
-Layout_K_SW128_Atom = Sw<3,4,3> o smem_ptr[32b](unset) o (_8,_64):(_64,_1)
+Layout_MN_INTER_Atom = Sw<0,4,3> o smem_ptr[32b](unset) o (_8,_8):(_1,_8)
+Layout_MN_SW32_Atom  = Sw<1,4,3> o smem_ptr[32b](unset) o (_16,_8):(_1,_16)
+Layout_MN_SW64_Atom  = Sw<2,4,3> o smem_ptr[32b](unset) o (_32,_8):(_1,_32)
+Layout_MN_SW128_Atom = Sw<3,4,3> o smem_ptr[32b](unset) o (_64,_8):(_1,_64)
 ```
 
 分别打印这 4 个 layout 如下：
@@ -745,7 +745,7 @@ Layout_K_SW128_Atom = Sw<3,4,3> o smem_ptr[32b](unset) o (_8,_64):(_64,_1)
 - 128bit： Layout: (_1,_8):(_1,_1)
 
 <div align="center">
-    <img src="/assets/wgmma-descriptor/Layout_MN_INTER_Atom_128bit.png" width="25%" height="auto" alt="swizzle"><br>
+    <img src="/assets/wgmma-descriptor/Layout_MN_INTER_Atom_128bit.png" width="35%" height="auto" alt="swizzle"><br>
     <small>Layout_MN_INTER_Atom_128bit</small>
 </div>
 <br>
@@ -753,7 +753,7 @@ Layout_K_SW128_Atom = Sw<3,4,3> o smem_ptr[32b](unset) o (_8,_64):(_64,_1)
 - half：Layout: (_8,_8):(_1,_8)
 
 <div align="center">
-    <img src="/assets/wgmma-descriptor/Layout_MN_INTER_Atom_half.png" width="25%" height="auto" alt="swizzle"><br>
+    <img src="/assets/wgmma-descriptor/Layout_MN_INTER_Atom_half.png" width="35%" height="auto" alt="swizzle"><br>
     <small>Layout_MN_INTER_Atom_half</small>
 </div>
 <br>
@@ -763,7 +763,7 @@ Layout_K_SW128_Atom = Sw<3,4,3> o smem_ptr[32b](unset) o (_8,_64):(_64,_1)
 - 128bit：Layout: Sw<1,0,3> o _0 o (_2,_8):(_1,_2)
 
 <div align="center">
-    <img src="/assets/wgmma-descriptor/Layout_MN_SW32_Atom_128bit.png" width="25%" height="auto" alt="swizzle"><br>
+    <img src="/assets/wgmma-descriptor/Layout_MN_SW32_Atom_128bit.png" width="35%" height="auto" alt="swizzle"><br>
     <small>Layout_MN_SW32_Atom_128bit</small>
 </div>
 <br>
@@ -771,7 +771,7 @@ Layout_K_SW128_Atom = Sw<3,4,3> o smem_ptr[32b](unset) o (_8,_64):(_64,_1)
 - half：Layout: Sw<1,3,3> o _0 o (_16,_8):(_1,_16)
 
 <div align="center">
-    <img src="/assets/wgmma-descriptor/Layout_MN_SW32_Atom_half.png" width="25%" height="auto" alt="swizzle"><br>
+    <img src="/assets/wgmma-descriptor/Layout_MN_SW32_Atom_half.png" width="35%" height="auto" alt="swizzle"><br>
     <small>Layout_MN_SW32_Atom_half</small>
 </div>
 <br>
@@ -781,7 +781,7 @@ Layout_K_SW128_Atom = Sw<3,4,3> o smem_ptr[32b](unset) o (_8,_64):(_64,_1)
 - 128bit：Layout: Sw<2,0,3> o _0 o (_4,_8):(_1,_4)
 
 <div align="center">
-    <img src="/assets/wgmma-descriptor/Layout_MN_SW64_Atom_128bit.png" width="25%" height="auto" alt="swizzle"><br>
+    <img src="/assets/wgmma-descriptor/Layout_MN_SW64_Atom_128bit.png" width="35%" height="auto" alt="swizzle"><br>
     <small>Layout_MN_SW64_Atom_128bit</small>
 </div>
 <br>
@@ -789,7 +789,7 @@ Layout_K_SW128_Atom = Sw<3,4,3> o smem_ptr[32b](unset) o (_8,_64):(_64,_1)
 - half：Layout: Sw<2,3,3> o _0 o (_32,_8):(_1,_32)
 
 <div align="center">
-    <img src="/assets/wgmma-descriptor/Layout_MN_SW64_Atom_half.png" width="16%" height="auto" alt="swizzle"><br>
+    <img src="/assets/wgmma-descriptor/Layout_MN_SW64_Atom_half.png" width="30%" height="auto" alt="swizzle"><br>
     <small>Layout_MN_SW64_Atom_half</small>
 </div>
 <br>
@@ -799,7 +799,7 @@ Layout_K_SW128_Atom = Sw<3,4,3> o smem_ptr[32b](unset) o (_8,_64):(_64,_1)
 - 128bit：Layout: Sw<3,0,3> o _0 o (_8,_8):(_1,_8)
 
 <div align="center">
-    <img src="/assets/wgmma-descriptor/Layout_MN_SW128_Atom_128bit.png" width="30%" height="auto" alt="swizzle"><br>
+    <img src="/assets/wgmma-descriptor/Layout_MN_SW128_Atom_128bit.png" width="40%" height="auto" alt="swizzle"><br>
     <small>Layout_MN_SW128_Atom_128bit</small>
 </div>
 <br>
@@ -807,7 +807,7 @@ Layout_K_SW128_Atom = Sw<3,4,3> o smem_ptr[32b](unset) o (_8,_64):(_64,_1)
 - half：Layout: Sw<3,3,3> o _0 o (_64,_8):(_1,_64)
 
 <div align="center">
-    <img src="/assets/wgmma-descriptor/Layout_MN_SW128_Atom_half.png" width="16%" height="auto" alt="swizzle"><br>
+    <img src="/assets/wgmma-descriptor/Layout_MN_SW128_Atom_half.png" width="25%" height="auto" alt="swizzle"><br>
     <small>Layout_MN_SW128_Atom_half</small>
 </div>
 <br>
@@ -828,7 +828,7 @@ print_latex(sA1);print("\n");
 ```
 
 <div align="center">
-    <img src="/assets/wgmma-descriptor/128B_swizzle_mn_12_tiling.png" width="50%" height="auto" alt="swizzle"><br>
+    <img src="/assets/wgmma-descriptor/128B_swizzle_mn_12_tiling.png" width="70%" height="auto" alt="swizzle"><br>
     <small>mn-major 128B swizzle column tiling</small>
 </div>
 <br>
@@ -842,7 +842,7 @@ print_latex(sA1);print("\n");
 ```
 
 <div align="center">
-    <img src="/assets/wgmma-descriptor/128B_swizzle_mn_21_tiling.png" width="50%" height="auto" alt="swizzle"><br>
+    <img src="/assets/wgmma-descriptor/128B_swizzle_mn_21_tiling.png" width="70%" height="auto" alt="swizzle"><br>
     <small>mn-major 128B swizzle row tiling</small>
 </div>
 <br>
@@ -979,13 +979,13 @@ make_gmma_desc(Tensor<TEngine,TLayout> const& tensor)
 
 组合后的结果是：`smem_ptr16b o (((_8,_8),(_8,_2)),_2,_4):(((_1,_64),(_8,_1024)),_512,_2048)`。
 
-这个 layout 表示 128×64 的 smem，被 wgmma（64×16）在列方向上分了 2 块，在行方向上被分了 4 块，其中列方向包含 8 个 pattern，行方向包含 2 个pattern。
+这个 layout 表示 128×64 的 smem，被 wgmma（64×16）在列方向上分了 2 块，在行方向上被分了 4 块，其中列方向包含 8 个 pattern，行方向包含 2 个 pattern。
 
 然后创建每一块 tensor 的描述符。创建描述符的时候传进 make_gmma_desc 函数的是 `smem_ptr16b o ((_8,_8),(_8,_2)):((_1,_64),(_8,_1024))`，也就是 1 块的 layout。不同块的描述符的区别主要是地址，后面会根据索引对地址计算 offset。
 
 recast 为 128bit 后变成 `smem_ptr128b o ((_1,_8),(_8,_2)):((_1,_8),(_1,_128))`。也就是原本的 8 个 half 变成了一个 128bit 元素。
 
-然后进一步把 128bit tensor 按照 （W,8）进行分块。这里 W 就是 swizzle pattern 的宽度，none = 1，32B = 2，64B = 4，128B = 8。
+然后进一步把 128bit tensor 按照（W,8）进行分块。这里 W 就是 swizzle pattern 的宽度，none = 1，32B = 2，64B = 4，128B = 8。
 
 分完之后得到 `canonical_layout = ((_1,_8),(_8,_2)):((_8,_8),(_1,_128))`。
 
@@ -1013,7 +1013,7 @@ desc.bitfield.leading_byte_offset_ = (LAYOUT_TYPE == LayoutType::INTERLEAVE) ? s
 直接从图中也可以看到。因为是 MN-major，所以在 M 方向上 swizzle pattern 之间的 offset 是 8。在 K 方向上的 offset 是 128。因为这里 SBO 和 LBO 是反的，所以 LBO = 128， SBO = 8。
 
 <div align="center">
-    <img src="/assets/wgmma-descriptor/mn_none_sw_desc.png" width="80%" height="auto" alt="swizzle"><br>
+    <img src="/assets/wgmma-descriptor/mn_none_sw_desc.png" width="100%" height="auto" alt="swizzle"><br>
     <small>mn-major none swizzle tiling 128×64</small>
 </div>
 <br>
@@ -1101,7 +1101,7 @@ recast 为 128bit 后变成 `Sw<1,4,3>_smem_ptr128b o ((_2,_4),(_8,_2)):((_1,_16
 
 得到 `canonical_layout = ((_2,_4),(_8,_2)):((_1,_16),(_2,_128))`。
 
-有了 `canonical_layout` 后就可以计算LBO和SBO了。
+有了 `canonical_layout` 后就可以计算 LBO 和 SBO 了。
 
 stride_00 = stride<0,0>(canonical_layout) = 1。这里因为 MN 方向连续，所以 stride = 1。
 
@@ -1123,7 +1123,7 @@ desc.bitfield.leading_byte_offset_ = (LAYOUT_TYPE == LayoutType::INTERLEAVE) ? s
 直接从图中也可以看到。因为是 MN-major，所以在 M 方向上 swizzle pattern 之间的 offset 是 16。在 K 方向上的 offset 是 128，所以 SBO = 128，LBO = 16。
 
 <div align="center">
-    <img src="/assets/wgmma-descriptor/mn_32BSW_desc.png" width="80%" height="auto" alt="swizzle"><br>
+    <img src="/assets/wgmma-descriptor/mn_32BSW_desc.png" width="100%" height="auto" alt="swizzle"><br>
     <small>mn-major 32B swizzle tiling 128×64</small>
 </div>
 <br>
@@ -1131,7 +1131,7 @@ desc.bitfield.leading_byte_offset_ = (LAYOUT_TYPE == LayoutType::INTERLEAVE) ? s
 
 下面是打印不同块上的描述符的结果。
 
-因为 wgmma 的计算大小是 64×16，所以 128×64 的 smem 被分为 2×4 块。第一块的起始地址就是 smem 的起始地址，为 0x0040。列方向第二块和第一块的起始地址差了 8×8 = 64，所以地址变成了 0x0080。列方向第二块和第一块相差了 16×16 = 256，所以地址变成了 0x0140。
+因为 wgmma 的计算大小是 64×16，所以 128×64 的 smem 被分为 2×4 块。第一块的起始地址就是 smem 的起始地址，为 0x0040。列方向第二块和第一块的起始地址差了 8×8 = 64，所以地址变成了 0x0080。行方向第二块和第一块相差了 16×16 = 256，所以地址变成了 0x0140。
 
 ```cpp
 GMMA::DescriptorIterator o (_1,_2,_4):(_0,_64,_256):
@@ -1231,7 +1231,7 @@ desc.bitfield.leading_byte_offset_ = (LAYOUT_TYPE == LayoutType::INTERLEAVE) ? s
 直接从图中也可以看到。因为是 MN-major，所以在 M 方向上 swizzle pattern 之间的 offset 是 32。在 K 方向上的 offset 是 128，所以 SBO = 128，LBO = 32。
 
 <div align="center">
-    <img src="/assets/wgmma-descriptor/mn_64BSW_desc.png" width="80%" height="auto" alt="swizzle"><br>
+    <img src="/assets/wgmma-descriptor/mn_64BSW_desc.png" width="100%" height="auto" alt="swizzle"><br>
     <small>mn-major 64B swizzle tiling 128×64</small>
 </div>
 <br>
@@ -1304,7 +1304,7 @@ GMMA::DescriptorIterator o (_1,_2,_4):(_0,_64,_256):
 
 因此整个 shared memory 被分成 `Sw<3,4,3> o smem_ptr16b o ((_64,_2),(_8,_8)):((_1,_512),(_64,_1024))`。
 
-与 wgmma的 `LayoutA_TV: (_128,(_64,_16)):(_0,(_1,_64))` 组合后得到：`Sw<3,4,3>_smem_ptr16b o ((_64,(_8,_2)),_2,_4):((_1,(_64,_1024)),_512,_2048)`。
+与 wgmma 的 `LayoutA_TV: (_128,(_64,_16)):(_0,(_1,_64))` 组合后得到：`Sw<3,4,3>_smem_ptr16b o ((_64,(_8,_2)),_2,_4):((_1,(_64,_1024)),_512,_2048)`。
 
 然后创建 tensor 描述符。创建描述符的时候传进 make_gmma_desc 函数的是 `Sw<3,4,3>_smem_ptr16b o (_64,(_8,_2)):(_1,(_64,_1024))`。
 
@@ -1312,7 +1312,7 @@ recast 为 128bit 后变成 `Sw<3,4,3>_smem_ptr128b o (_8,(_8,_2)):(_1,(_8,_128)
 
 设置 layout_type 为 128B，起始地址为 smem 的地址，base_offset = 0。然后计算 LBO 和 SBO。
 
-把 uint128 tensor 按（W,8）进行分块。这里W就是 swizzle pattern 的宽度，none = 1，32B = 2，64B = 4，128B = 8。
+把 uint128 tensor 按（W,8）进行分块。这里 W 就是 swizzle pattern 的宽度，none = 1，32B = 2，64B = 4，128B = 8。
 
 得到 `canonical_layout = ((_8,_1),(_8,_2)):((_1,_0),(_8,_128))`。
 
@@ -1324,7 +1324,7 @@ stride_10 = stride<1,0>(canonical_layout) = 8。stride10 和 swizzle pattern 的
 
 stride_01 = stride<0,1>(canonical_layout) = 0。因为是 128B swizzle 的一个 pattern 就占满 MN 的大小了，所以 stride 没有意义。如果 wgmma 的 N = 128，这个 stride 就是 128B swizzle 的元素个数 64。
 
-stride_11 = stride<1,1>(canonical_layout) = 128。因为是 64B swizzle，所以两列之间的 stride = 16 * 8 = 128。
+stride_11 = stride<1,1>(canonical_layout) = 128。因为是 128B swizzle，所以两列之间的 stride = 16 * 8 = 128。
 
 最终得到
 
@@ -1338,7 +1338,7 @@ desc.bitfield.leading_byte_offset_ = (LAYOUT_TYPE == LayoutType::INTERLEAVE) ? s
 直接从图中也可以看到。因为是 MN-major，所以在 M 方向上 swizzle pattern 之间的 offset 是 64，因为这里只重复一次，所以 LBO 可以随便设置，这里设置为 0。在 K 方向上的 offset 是 128，所以 SBO = 128，LBO = 0。
 
 <div align="center">
-    <img src="/assets/wgmma-descriptor/mn_128BSW_desc.png" width="80%" height="auto" alt="swizzle"><br>
+    <img src="/assets/wgmma-descriptor/mn_128BSW_desc.png" width="100%" height="auto" alt="swizzle"><br>
     <small>mn-major 128B swizzle tiling 128×64</small>
 </div>
 <br>
@@ -1413,7 +1413,7 @@ GMMA::DescriptorIterator o (_1,_2,_4):(_0,_64,_256):
 直接从图中可以看到。因为是 MN-major，所以在 M 方向上 swizzle pattern 之间的 offset 是 64。因为这里 wgmma 在 M 上的大小是 64，128B swizzle pattern 只重复一次，所以 LBO 可以随便设置，这里设置为 0。如果 wgmma 在 N 方向上使用的是更大的 shape，这里 LBO 就是 512。在 K 方向上的 offset 是 64，所以 SBO = 64。
 
 <div align="center">
-    <img src="/assets/wgmma-descriptor/mn_128BSW_desc_21.png" width="90%" height="auto" alt="swizzle"><br>
+    <img src="/assets/wgmma-descriptor/mn_128BSW_desc_21.png" width="100%" height="auto" alt="swizzle"><br>
     <small>mn-major 128B swizzle row tiling 128×64</small>
 </div>
 <br>

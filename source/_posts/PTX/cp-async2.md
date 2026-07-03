@@ -1,6 +1,6 @@
 ---
 title: cp.async 系列指令（二）
-date: 2026-06-20 21:00:00
+date: 2026-03-20 21:00:00
 tags: [CUDA, PTX, cp.async, GPU, TMA]
 categories: [PTX 学习笔记]
 description: 本文介绍了 cp.async 指令在 Hopper 架构上的拓展指令 cp.async.bulk，也就是 Tensor Memory Accelerate（TMA）支持的指令之一。文章先介绍了 TMA 的基本信息，然后详细介绍了 cp.async.bulk 的使用方法。

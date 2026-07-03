@@ -1,6 +1,6 @@
 ---
 title: mbarrier 指令
-date: 2026-06-26 11:00:00
+date: 2026-05-24 11:00:00
 tags: [CUDA, PTX, mbarrier]
 categories: [PTX 学习笔记]
 description: 文章介绍了 CUDA PTX mbarrier 异步屏障指令的设计原理和使用方法，涵盖 init、arrive、wait、expect_tx、complete_tx 等操作方法及 arrive_drop、test_wait、try_wait 等机制。

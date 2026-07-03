@@ -1,6 +1,6 @@
 ---
 title: cp.async 系列指令（三）
-date: 2026-06-20 22:00:00
+date: 2026-03-20 22:00:00
 tags: [CUDA, PTX, cp.async, GPU, TMA]
 categories: [PTX 学习笔记]
 description: 本文重点介绍了多维 Tensor 类型数据使用 TMA 加载的方式。文章首先介绍了 Tensor 数据的概念，然后详细说明了使用指令加载多维 Tensor 的方法，最后介绍了 TMA Swizzle 和 async-group 完成机制的指令。

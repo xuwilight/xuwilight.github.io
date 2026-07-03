@@ -1,6 +1,6 @@
 ---
 title: ldmatrix 指令
-date: 2026-06-24 10:00:00
+date: 2026-04-14 10:00:00
 tags: [CUDA, PTX, ldmatrix]
 categories: [PTX 学习笔记]
 description: 文章介绍了 PTX 中的 ldmatrix 指令和 stmatrix 指令，涵盖指令的线程与数据布局关系，以及在代码中具体的使用方法。
