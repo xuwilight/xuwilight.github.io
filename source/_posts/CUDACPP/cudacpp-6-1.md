@@ -1,7 +1,7 @@
 ---
 title: CUDA C++ 笔记（二）第6章——Programming Interface（一）
 date: 2024-06-05 20:00:00
-tags: [CUDA, NVCC, Runtime]
+tags: [CUDA, NVCC, CUDA C++]
 categories: [CUDA C++ Programming Guide]
 description: 本篇涵盖第 6 章 Programming Interface 的前半部分（6.1-6.2.7），包括 NVCC 编译流程（离线编译、即时编译、兼容性）、CUDA Runtime 初始化、设备内存分配、L2 缓存访问管理、共享内存、分布式共享内存、页锁定主机内存以及内存同步域等内容。
 ---

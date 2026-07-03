@@ -1,7 +1,7 @@
 ---
 title: CUDA C++ 笔记（十二）第17章——C++ Language Support（二）
 date: 2024-07-23 20:00:00
-tags: [CUDA, C++ Language Support, NVCC, Lambda]
+tags: [CUDA, CUDA C++]
 categories: [CUDA C++ Programming Guide]
 description: 第17章 C++ Language Support 第二部分，介绍多态函数包装器 nvstd::function、扩展 Lambda（Extended Lambdas）的使用与限制，以及设备代码中的 C++ 代码示例。
 ---

@@ -1,7 +1,7 @@
 ---
 title: CuTe 学习笔记（十一）GEMM SM80
 date: 2025-04-20 18:00:00
-tags: [CUTLASS, GEMM, SM80, GPU]
+tags: [CUTLASS, GEMM]
 categories: [Cutlass 学习笔记]
 description: 主要功能是使用 LDGSTS 指令，也就是 cp.async 进行异步拷贝。其他的与普通 GEMM 没啥区别，使用的普通矩阵乘法，没有使用 Tensor Core 计算。
 ---

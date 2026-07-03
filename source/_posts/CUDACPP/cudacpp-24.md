@@ -1,7 +1,7 @@
 ---
 title: CUDA C++ 笔记（十五）第19章与第9章——Unified Memory 与 CDP1
 date: 2024-08-04 20:00:00
-tags: [CUDA, Unified Memory, CDP, Dynamic Parallelism]
+tags: [CUDA, CUDA C++]
 categories: [CUDA C++ Programming Guide]
 description: 第19章介绍统一内存（Unified Memory）编程模型、cudaMallocManaged、预取与数据使用提示；第9章介绍传统 CUDA 动态并行（CDP1）的执行环境、内存模型与编程接口。
 ---

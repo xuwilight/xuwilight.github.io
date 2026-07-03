@@ -1,7 +1,7 @@
 ---
 title: CUDA C++ 笔记（五）第10章——C++ Language Extensions（一）
 date: 2024-06-17 20:00:00
-tags: [CUDA, C++ Extensions, Atomic]
+tags: [CUDA, C++ Extensions, CUDA C++]
 categories: [CUDA C++ Programming Guide]
 description: 本篇涵盖第 10 章 C++ Language Extensions 的前半部分（10.1-10.18），包括函数执行空间说明符、变量存储空间说明符、内建向量类型与变量、Memory Fence、同步函数、只读数据缓存加载、原子函数、地址空间判定与转换、alloca 函数以及编译器优化提示函数。
 ---

@@ -1,7 +1,7 @@
 ---
 title: Cutlass 学习笔记（十一）Hopper Grouped GEMM
 date: 2025-08-25 12:00:00
-tags: [CUTLASS, Hopper, Grouped GEMM, GPU]
+tags: [CUTLASS, Hopper, Grouped GEMM]
 categories: [Cutlass 学习笔记,Cutlass]
 description: 常用于 moe。假如有 e 个专家，input 的 shape 是[m * e, k]，每个专家的权重是[n, k]，总的权重是 [n * e, k]，所以 x*wT 后的输出 shape 是[m * e, n] ```cpp class "cutlass::gemm::kernel::GemmUniversal<cutlass::gemm::GroupProblemShape<cute::...
 ---

@@ -1,7 +1,7 @@
 ---
 title: CUDA C++ 笔记（九）第11章——Cooperative Groups
 date: 2024-07-03 20:00:00
-tags: [CUDA, Cooperative Groups, GPU]
+tags: [CUDA, CUDA C++]
 categories: [CUDA C++ Programming Guide]
 description: 学习笔记：CUDA Cooperative Groups（协作组）编程模型，包括隐式组、显式组、组划分、集体操作和网格同步等核心概念。
 ---

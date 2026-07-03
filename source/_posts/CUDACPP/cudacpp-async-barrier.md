@@ -1,7 +1,7 @@
 ---
 title: CUDA C++ 笔记（十六）——异步屏障 Asynchronous Barrier
 date: 2024-08-08 20:00:00
-tags: [CUDA, Asynchronous Barrier, cuda::barrier]
+tags: [CUDA, CUDA C++]
 categories: [CUDA C++ Programming Guide]
 description: 介绍 cuda::barrier 的使用模式，包括简单同步、时间分割的五阶段同步、空间分区（Warp 特化）、提前退出、完成函数以及 mbarrier 原语接口。
 ---

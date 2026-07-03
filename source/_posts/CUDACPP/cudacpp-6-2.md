@@ -1,7 +1,7 @@
 ---
 title: CUDA C++ 笔记（三）第6章——Programming Interface（二）
 date: 2024-06-09 20:00:00
-tags: [CUDA, Stream, Graph]
+tags: [CUDA, Stream, CUDA C++]
 categories: [CUDA C++ Programming Guide]
 description: 本篇涵盖第 6 章 Programming Interface 的后半部分（6.2.8-6.2.15），包括异步并发执行、流（Streams）、程序化相关启动、CUDA Graphs、事件（Events）、多设备系统、错误检查等内容。
 ---

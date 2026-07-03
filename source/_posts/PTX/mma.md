@@ -1,6 +1,6 @@
 ---
 title: mma 矩阵乘加指令
-date: 2026-04-24 12:00:00
+date: 2026-04-14 12:00:00
 tags: [CUDA, PTX, mma, Tensor Core]
 categories: [PTX 学习笔记]
 description: 深入解析 CUDA PTX mma 矩阵乘加指令，涵盖 m8n8k4、m16n8k8、m16n8k16 形状下的线程与数据布局关系及完整代码示例。

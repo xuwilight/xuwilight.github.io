@@ -1,7 +1,7 @@
 ---
 title: CUDA C++ 笔记（十四）第21-23章 Driver API
 date: 2024-07-31 20:00:00
-tags: [CUDA, CUDA Environment, API]
+tags: [CUDA, CUDA C++]
 categories: [CUDA C++ Programming Guide]
 description: 第21-23章，介绍 CUDA 相关的环境变量、API 和其他参考内容。
 ---

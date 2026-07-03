@@ -1,7 +1,7 @@
 ---
 title: CuTe 学习笔记（十）SGEMM 02
 date: 2025-04-12 18:00:00
-tags: [CUTLASS, SGEMM, GEMM, GPU]
+tags: [CUTLASS, GEMM]
 categories: [Cutlass 学习笔记]
 description: sgemm_02 和 sgemm_01 没什么区别。主要展示了通过 make_tiled_mma 和 make_tiled_copy 的使用方式。 矩阵乘的规模依然是 M = N = 5120，K = 4096。 数据类型全是 float，矩阵 A 选择 row-major，矩阵 B 选择 column-major。
 ---

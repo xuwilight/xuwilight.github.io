@@ -1,7 +1,7 @@
 ---
 title: CuTe 学习笔记（十三）GEMM SM90 TMA
 date: 2025-04-25 18:00:00
-tags: [CUTLASS, GEMM, TMA, SM90, GPU]
+tags: [CUTLASS, GEMM, TMA]
 categories: [Cutlass 学习笔记]
 description: sm90_tma 是在 sm90 上的拓展，通过使用 tma 进行异步数据拷贝，并结合 wgmma 来进行异步计算。 初始化没什么好说的 矩阵乘的规模 M = N = 5120，K = 4096。 数据类型全是 half，矩阵 A 选择 row-major，矩阵 B 选择 column-major。
 ---

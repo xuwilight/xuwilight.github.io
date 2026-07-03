@@ -1,7 +1,7 @@
 ---
 title: CUDA C++ 笔记（一）第1章——第5章 Programming Model
 date: 2024-06-01 20:00:00
-tags: [CUDA, GPU, Programming Model]
+tags: [CUDA, GPU, CUDA C++]
 categories: [CUDA C++ Programming Guide]
 description: 本篇涵盖 CUDA C++ Programming Guide 的第 1 到第 5 章，包括 GPU 的优势、CUDA 平台概述、可扩展编程模型，以及 Programming Model（kernels、线程层次结构、内存层次结构、异构编程、异步 SIMT 编程模型、计算能力）等内容。
 ---

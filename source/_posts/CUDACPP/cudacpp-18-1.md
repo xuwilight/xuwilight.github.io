@@ -1,7 +1,7 @@
 ---
 title: CUDA C++ 笔记（十一）第17章——C++ Language Support（一）
 date: 2024-07-19 20:00:00
-tags: [CUDA, C++ Language Support, NVCC]
+tags: [CUDA, CUDA C++]
 categories: [CUDA C++ Programming Guide]
 description: 第17章 C++ Language Support 第一部分，介绍 CUDA 对 C++11/14/17/20 语言特性的支持，以及 NVCC 编译器的各种限制（内存空间说明符、函数、类、模板等）。
 ---

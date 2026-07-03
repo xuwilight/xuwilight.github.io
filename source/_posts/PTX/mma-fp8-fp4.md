@@ -1,7 +1,7 @@
 ---
 title: mma FP8/FP4 指令
-date: 2026-04-24 15:00:00
-tags: [CUDA, PTX, mma, Tensor Core, FP8, FP4, MXFP8, MXFP4, NVFP4, Block Scaling]
+date: 2026-04-14 15:00:00
+tags: [CUDA, PTX, mma, Tensor Core]
 categories: [PTX 学习笔记]
 description: 深入解析 CUDA PTX mma FP8/FP4 系列指令，涵盖 FP8 (E4M3/E5M2)、MXFP8、FP4 (E2M1)、MXFP4、NVFP4 的数据格式、Block Scaling 机制及 mma 语法详解。
 published: true

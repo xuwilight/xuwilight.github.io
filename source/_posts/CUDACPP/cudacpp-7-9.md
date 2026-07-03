@@ -1,7 +1,7 @@
 ---
 title: CUDA C++ 笔记（四）第7章——第9章 Hardware and Performance Guidelines
 date: 2024-06-13 20:00:00
-tags: [CUDA, Performance, GPU]
+tags: [CUDA, Performance, CUDA C++]
 categories: [CUDA C++ Programming Guide]
 description: 本篇涵盖第 7 到第 9 章，包括 Hardware Implementation（硬件结构、SIMT 架构、层级结构）、Performance Guidelines（最大化并行度、最大化内存吞吐量、最大化指令吞吐量、最小化内存抖动）以及 CUDA-Enabled GPUs。
 ---

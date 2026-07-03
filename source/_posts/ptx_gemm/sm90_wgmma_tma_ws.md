@@ -1,8 +1,8 @@
 ---
-title: SM90 GEMM —— Warp Specialization
-date: 2026-06-01 10:00:00
+title: SM90 GEMM 实现（二）—— Warp Specialization
+date: 2026-01-14 10:00:00
 tags: [CUDA, GEMM, TMA, WGMMA, SM90, GPU]
-categories: [GEMM 优化]
+categories: [GEMM 性能优化]
 description: 本文将使用 Warp Specialization（WS）技术，结合 TMA 和 WGMMA 在 Hopper 架构（H200）上实现一个高性能的矩阵乘。
 
 ---

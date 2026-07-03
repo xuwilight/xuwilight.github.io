@@ -1,7 +1,7 @@
 ---
 title: wgmma 矩阵描述符
 date: 2026-05-15 14:00:00
-tags: [CUDA, PTX, wgmma, Tensor Core, Hopper, Swizzle]
+tags: [CUDA, PTX, wgmma, Tensor Core, Swizzle]
 categories: [PTX 学习笔记]
 description: 深入解析 wgmma 矩阵描述符结构，涵盖 K-Major 和 MN-Major 下不同 Swizzle 模式的 LBO/SBO 确定方式及 cutlass make_gemm_desc 实现原理。
 ---

@@ -1,8 +1,8 @@
 ---
-title: SM90 GEMM —— Persistent Pingpong
-date: 2026-06-06 12:00:00
+title: SM90 GEMM 实现（三）—— Persistent Pingpong
+date: 2026-01-20 12:00:00
 tags: [CUDA, GEMM, TMA, WGMMA, SM90, GPU]
-categories: [GEMM 优化]
+categories: [GEMM 性能优化]
 description: 本文进一步实现 persistent pingpong kernel 版本。主要改进是将原本的 grid-level 并行改为 persistent 模式，并引入两个 consumer warpgroup 进行 pingpong 式交替计算，以更好地隐藏流水线启动开销，提高 SM 利用率。
 
 ---

@@ -1,7 +1,7 @@
 ---
 title: CUDA C++ 笔记（十一）第14-15章——虚拟内存管理与 Stream Ordered Memory Allocator
 date: 2024-07-11 20:00:00
-tags: [CUDA, Virtual Memory, Memory Allocator]
+tags: [CUDA, CUDA C++]
 categories: [CUDA C++ Programming Guide]
 description: CUDA 虚拟内存管理(VMM) API 将地址与内存解耦，提供细粒度的 GPU 内存控制。Stream Ordered Memory Allocator 通过 cudaMallocAsync/cudaFreeAsync 实现流序内存分配，支持内存池、重用策略和跨进程共享。
 ---

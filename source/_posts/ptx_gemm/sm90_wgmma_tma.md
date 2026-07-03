@@ -1,8 +1,8 @@
 ---
-title: SM90 GEMM
-date: 2026-05-28 10:00:00
+title: SM90 GEMM 实现（一）
+date: 2026-01-10 10:00:00
 tags: [CUDA, GEMM, TMA, WGMMA, SM90, GPU]
-categories: [GEMM 优化]
+categories: [GEMM 性能优化]
 description: 使用 TMA 和 WGMMA 在 Hopper 架构（H200）上实现一个高性能的矩阵乘，涵盖 TMA 描述符创建、mbarrier 流水线同步、WGMMA 描述符与计算、stmatrix epilogue 等完整流程，达到 98% cublas 性能。
 ---
 

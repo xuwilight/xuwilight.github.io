@@ -1,7 +1,7 @@
 ---
 title: CUDA C++ 笔记（八）第10章——C++ Language Extensions（四）
 date: 2024-06-29 20:00:00
-tags: [CUDA, Device Functions, PTX, GPU]
+tags: [CUDA, CUDA C++]
 categories: [CUDA C++ Programming Guide]
 description: 分析器计数器、断言、陷阱/断点函数、printf、动态全局内存分配、执行配置、启动界限、寄存器数量控制、#pragma unroll、SIMD 视频指令、诊断程序
 ---

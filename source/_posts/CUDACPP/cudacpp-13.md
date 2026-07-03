@@ -1,7 +1,7 @@
 ---
 title: CUDA C++ 笔记（十）第13章——CUDA Dynamic Parallelism
 date: 2024-07-07 20:00:00
-tags: [CUDA, Dynamic Parallelism, GPU]
+tags: [CUDA, CUDA C++]
 categories: [CUDA C++ Programming Guide]
 description: 学习笔记：CUDA Dynamic Parallelism（动态并行），包括执行环境、内存模型、编程接口和编程指南。
 ---

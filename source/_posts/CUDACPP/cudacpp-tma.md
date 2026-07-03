@@ -1,7 +1,7 @@
 ---
 title: CUDA C++ 笔记（十八）——张量内存加速器 TMA
 date: 2024-08-16 20:00:00
-tags: [CUDA, TMA, Tensor Memory Accelerator]
+tags: [CUDA, TMA, CUDA C++]
 categories: [CUDA C++ Programming Guide]
 description: 介绍张量内存加速器 (TMA) 的使用，包括一维和多维数组的批量异步复制、张量映射的创建与传输、TMA Swizzle 模式以及设备端张量映射编码。
 ---

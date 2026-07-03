@@ -1,7 +1,7 @@
 ---
 title: Cutlass 学习笔记（十）SM90 GEMM TMA WS Cooperative
 date: 2025-08-24 12:00:00
-tags: [CUTLASS, GEMM, TMA, WarpSpecialized, Cooperative, SM90, GPU]
+tags: [CUTLASS, GEMM, TMA, WarpSpecialized]
 categories: [Cutlass 学习笔记,Cutlass]
 description: ws_cooperative 也是一个 persistent kernel，与 pingpong 的区别是存在两个消费者 warp groups 协作处理同一块 output tile，方法是将 output tile 沿着 M 维度分割成两半。这允许使用更大的 output tile，因为每个消费者 warp group 的寄存器压力降低了，从而可以提高性能。
 ---

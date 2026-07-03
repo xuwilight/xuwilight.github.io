@@ -1,7 +1,7 @@
 ---
 title: CUDA C++ 笔记（七）第10章——C++ Language Extensions（三）
 date: 2024-06-25 20:00:00
-tags: [CUDA, Async Copy, TMA, GPU]
+tags: [CUDA, CUDA C++]
 categories: [CUDA C++ Programming Guide]
 description: 异步数据拷贝：memcpy_async API、cuda::barrier、cuda::pipeline、TMA（Tensor Memory Accelerator）等异步拷贝机制的学习笔记
 ---

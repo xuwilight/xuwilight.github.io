@@ -1,7 +1,7 @@
 ---
 title: CUDA C++ 笔记（十三）第18-19章——纹理获取与计算能力
 date: 2024-07-27 20:00:00
-tags: [CUDA, Texture Memory, Compute Capability]
+tags: [CUDA, CUDA C++]
 categories: [CUDA C++ Programming Guide]
 description: 第18-19章，介绍纹理获取（Texture Fetching）的采样模式与插值方法，以及各代 GPU 架构的计算能力（Compute Capability）。
 ---

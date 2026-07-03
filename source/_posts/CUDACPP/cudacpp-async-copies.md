@@ -1,7 +1,7 @@
 ---
 title: CUDA C++ 笔记（十七）——异步数据复制 Asynchronous Data Copies
 date: 2024-08-12 20:00:00
-tags: [CUDA, memcpy_async, cuda::pipeline]
+tags: [CUDA, CUDA C++]
 categories: [CUDA C++ Programming Guide]
 description: 介绍 memcpy_async API、复制与计算模式、使用 cuda::barrier 和 cuda::pipeline 的异步数据复制、单阶段与多阶段流水线、性能指南以及流水线原语接口。
 ---

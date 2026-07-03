@@ -1,7 +1,7 @@
 ---
 title: CUDA C++ 笔记（六）第10章——C++ Language Extensions（二）
 date: 2024-06-21 20:00:00
-tags: [CUDA, Warp, WMMA]
+tags: [CUDA, CUDA C++]
 categories: [CUDA C++ Programming Guide]
 description: 本篇涵盖第 10 章 C++ Language Extensions 的第二部分（10.19-10.26），包括束内表决函数、束内匹配函数、束内规约函数、束内洗牌函数（Warp Shuffle）、Nanosleep 函数、束内矩阵函数（Warp Matrix Functions / Tensor Cores）、DPX 指令以及异步屏障（Asynchronous Barrier）。
 ---

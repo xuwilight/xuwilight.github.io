@@ -1,7 +1,7 @@
 ---
 title: CUDA C++ 笔记（十二）第16-17章——Graph Memory Nodes 与 Mathematical Functions
 date: 2024-07-15 20:00:00
-tags: [CUDA, Graph Memory, Mathematical Functions]
+tags: [CUDA, CUDA C++]
 categories: [CUDA C++ Programming Guide]
 description: CUDA Graph Memory Nodes 允许 Graph 管理内存分配和释放，支持内存复用与跨 GPU 对等访问。第17章涵盖 CUDA 标准数学函数及其 ULP 误差范围、内置函数优化以及 fast math 编译选项。
 ---
