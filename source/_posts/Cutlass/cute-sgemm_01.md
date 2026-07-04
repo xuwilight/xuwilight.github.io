@@ -1,5 +1,5 @@
 ---
-title: CuTe 学习笔记（九）SGEMM-01
+title: CuTe 学习笔记（九）SGEMM 01
 date: 2025-04-06 18:00:00
 tags: [CUTLASS, GEMM]
 categories: [Cutlass 学习笔记]

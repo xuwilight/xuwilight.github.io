@@ -1,6 +1,6 @@
 ---
-title: CuTe 学习笔记（八）Permutations 参数的作用
-date: 2025-03-27 18:00:00
+title: CuTe 学习笔记（七）Permutations 参数的作用
+date: 2025-03-24 18:00:00
 tags: [CUTLASS, CuTe, Permutations]
 categories: [Cutlass 学习笔记, CuTe]
 description: 深入解析 make_tiled_mma 中 Permutations 参数的作用，通过实例演示不同 Permutations 设置对 tiledMMA 线程布局和数据分区的影响。

@@ -1,1307 +1,1508 @@
 ---
-title: CuTe 学习笔记（六）CuTe tilledCOPY
-date: 2025-03-23 18:00:00
+title: CuTe 学习笔记（八）CuTe tilledCOPY
+date: 2025-03-25 18:00:00
 tags: [CUTLASS, CuTe, Copy]
 categories: [Cutlass 学习笔记, CuTe]
-description: 深入解析 CuTe tilledCOPY 机制，涵盖 Copy 指令的创建、partition 操作及多种 Copy 实现方式。
+description: 本文基于 CUTLASS 4.5.0 源码，深入分析 `include/cute/atom` 目录中 Copy（数据拷贝）相关组件的设计与实现。
 published: true
 mathjax: true
 ---
 
-# CuTe_tilledCOPY
 
-# copy op
 
-最基础的 copy 单元，底层调用的是 PTX 指令。根据指令的不同，可以将数据从 global memory 拷贝到 shared memory 或者从 smem 到 rmem。
+# TiledCopy
 
-UniversalCopy，单个线程的赋值操作。
+本文从最底层的 PTX 指令封装开始，逐层向上剖析 Copy Operation → Copy Traits → Copy Atom → TiledCopy → ThrCopy 的完整抽象链条，并以 Ampere（SM80 `cp.async`）、Turing（SM75 `ldmatrix`）和 Hopper（SM90 TMA）架构为例进行说明。
+
+
+## 1. 整体架构
+
+CuTe 对 Copy 的抽象与 MMA 非常相似，同样采用五层金字塔结构，自底向上依次为：
+
+* Copy Operation，PTX 指令封装：SRegisters, DRegisters, copy()。
+* Copy_Traits，位级布局：ThrID, SrcLayout, DstLayout, RefLayout。
+* Copy_Atom，可调用的原子 Copy：call(), with()。
+* TiledCopy，平铺后的 Copy：tidfrg_S/D, get_layoutS/D_TV。
+* ThrCopy，某个线程的视角：partition_S/D, retile_S/D。
+
+
+与 MMA 的区别：
+
+| 特性 | MMA | Copy |
+|:------:|:-----:|:------:|
+| 操作语义 | D = A × B + C | D ← S（数据搬运） |
+| 操作数数量 | 4 个（A, B, C, D） | 2 个（Src, Dst） |
+| 布局单位 | 坐标 (m, n, k) | **比特（bit）** |
+| 布局数量 | 3 个（ALayout, BLayout, CLayout） | 3 个（SrcLayout, DstLayout, **RefLayout**） |
+| 片段类型 | FrgTypeA/B/C | 单一 **ValType**（用户指定） |
+| 寄存器类型 | DRegisters, ARegisters, BRegisters, CRegisters | **SRegisters, DRegisters** |
+
+Copy 独有的 RefLayout 概念：Copy 引入了"参考布局"（RefLayout），用于在 Src 和 Dst 的线程-值映射之间建立桥梁。这在 Src 和 Dst 有不同线程分布时至关重要（如 `ldmatrix` 指令中，源数据在共享内存按一种分布排列，而目标寄存器按另一种分布排列）。
+
+| 层级 | 源文件 | 核心职责 |
+|:------:|:-----:|:------:|
+| Copy Operation | `include/cute/arch/copy*.hpp` | 封装 PTX 内联汇编 |
+| Copy Traits | `include/cute/atom/copy_traits*.hpp` | 描述线程-值到位的映射 |
+| Copy Atom | `include/cute/atom/copy_atom.hpp` | 提供调用接口和 ValType 参数化 |
+| TiledCopy | `include/cute/atom/copy_atom.hpp` | 将 Atom 在 MN 方向平铺 |
+| ThrCopy | `include/cute/atom/copy_atom.hpp` | 单线程的分区与执行视角 |
+
+
+## 2. Copy Operation
+
+PTX 指令的 C++ 封装。
+
+### 2.1 基本结构
+
+Copy Operation 是最底层的抽象，直接封装 PTX 指令。每个 Operation 结构体包含：
+
+- **`SRegisters`**：源（Source）的寄存器数组类型
+- **`DRegisters`**：目标（Destination）的寄存器数组类型
+- **`copy()`**：静态成员函数，执行数据搬运
+
+### 2.2 通用回退：UniversalCopy
+
+对于普通的标量拷贝，CuTe 提供了 `UniversalCopy`（见 `include/cute/arch/copy.hpp:45-61`）：
 
 ```cpp
-template <class S, class D = S>
-struct UniversalCopy
+template <class S, class D = S>
+struct UniversalCopy
 {
-  using SRegisters = S[1];
-  using DRegisters = D[1];
+  using SRegisters = S[1];   // 1 个源寄存器
+  using DRegisters = D[1];   // 1 个目标寄存器
 
-  // Sanity
-  static_assert(sizeof_bits_v<S> >= 8);
-  static_assert(sizeof_bits_v<D> >= 8);
+  static_assert(sizeof_bits_v<S> >= 8);
+  static_assert(sizeof_bits_v<D> >= 8);
 
-  CUTE_HOST_DEVICE static constexpr void
-  copy(S const& src,
-       D      & dst)
-  {
-    dst = src;
-  }
+  CUTE_HOST_DEVICE static constexpr void
+  copy(S const& src, D& dst)
+  {
+    dst = src;   // 简单赋值
+  }
 };
+
+// 自动向量化拷贝（假设最大 128-bit 对齐）
+using AutoVectorizingCopy = AutoVectorizingCopyWithAssumedAlignment<128>;
+// 默认拷贝（不假设对齐）
+using DefaultCopy = AutoVectorizingCopyWithAssumedAlignment<8>;
 ```
 
-cp.async 拷贝，异步拷贝，一个线程可以拷贝一个或多个字节。直接将数据从 gmem 拷贝到 smem。
+**`AutoVectorizingCopyWithAssumedAlignment<MaxVecBits>`** 是一个特殊的占位类型。它本身不执行具体指令，而是告诉 CuTe 的 copy 算法："可以假设指针和布局对齐到 MaxVecBits，请自动选择最优的向量化拷贝方式"。CuTe 会根据张量的实际布局，自动将这种"通用拷贝"展开为合适宽度的 `UniversalCopy<uint128_t>` 等指令。
+
+### 2.3 Ampere 架构：cp.async（SM80）
+
+Ampere 引入了 `cp.async` 指令，可以直接从全局内存异步拷贝到共享内存，无需经过寄存器中转（见 `include/cute/arch/copy_sm80.hpp:46-70`）：
 
 ```cpp
-template <class TS, class TD = TS>
-struct SM80_CP_ASYNC_CACHEALWAYS
+/// cp.async.ca: 全缓存级别的异步拷贝
+template <class TS, class TD = TS>
+struct SM80_CP_ASYNC_CACHEALWAYS
 {
-  using SRegisters = TS[1];
-  using DRegisters = TD[1];
+  using SRegisters = TS[1];   // 1 个源值（gmem）
+  using DRegisters = TD[1];   // 1 个目标值（smem）
 
-  static_assert(sizeof(TS) == sizeof(TD), "cp.async requires sizeof(src_value_type) == sizeof(dst_value_type)");
-  static_assert(sizeof(TS) == 4 || sizeof(TS) == 8 || sizeof(TS) == 16, "cp.async sizeof(TS) is not supported");
+  static_assert(sizeof(TS) == sizeof(TD), "源和目标大小必须相同");
+  static_assert(sizeof(TS) == 4 || sizeof(TS) == 8 || sizeof(TS) == 16,
+                "cp.async 支持 4/8/16 字节");
 
-  CUTE_HOST_DEVICE static void
-  copy(TS const& gmem_src,
-       TD      & smem_dst)
-  {
-#if defined(CUTE_ARCH_CP_ASYNC_SM80_ENABLED)
-    TS const* gmem_ptr    = &gmem_src;
-    uint32_t smem_int_ptr = cast_smem_ptr_to_uint(&smem_dst);
-    asm volatile("cp.async.ca.shared.global.L2::128B [%0], [%1], %2;\n"
-        :: "r"(smem_int_ptr),
-           "l"(gmem_ptr),
-           "n"(sizeof(TS)));
+  CUTE_HOST_DEVICE static void
+  copy(TS const& gmem_src, TD& smem_dst)
+  {
+#if defined(CUTE_ARCH_CP_ASYNC_SM80_ENABLED)
+    TS const* gmem_ptr = &gmem_src;
+    uint32_t smem_int_ptr = cast_smem_ptr_to_uint(&smem_dst);
+    asm volatile("cp.async.ca.shared.global.L2::128B [%0], [%1], %2;\n"
+        :: "r"(smem_int_ptr),    // 共享内存地址
+           "l"(gmem_ptr),        // 全局内存地址
+           "n"(sizeof(TS)));     // 拷贝字节数（编译期常量）
 #else
-    CUTE_INVALID_CONTROL_PATH("Support for cp.async instructions has not been enabled");
+    CUTE_INVALID_CONTROL_PATH("...");
 #endif
-  }
+  }
+};
+
+/// cp.async.cg: 全局缓存级别的异步拷贝（仅 16 字节）
+template <class TS, class TD = TS>
+struct SM80_CP_ASYNC_CACHEGLOBAL
+{
+  using SRegisters = TS[1];
+  using DRegisters = TD[1];
+
+  static_assert(sizeof(TS) == 16, "cp.async.cg 仅支持 16 字节");
+
+  CUTE_HOST_DEVICE static void
+  copy(TS const& gmem_src, TD& smem_dst)
+  {
+    // ... cp.async.cg.shared.global.L2::128B ...
+  }
 };
 ```
 
-ldmatrix 拷贝，warp 级别的拷贝，从 smem 到 rmem。
+**`cp.async` 的关键特性**：
+- **异步执行**：发起后不阻塞，需要后续 `cp.async.commit_group` 和 `cp.async.wait_group` 同步
+- **绕过寄存器**：数据直接从 gmem 到 smem，不占用寄存器
+- **缓存策略**：`.ca` 缓存在所有级别，`.cg` 只缓存在全局级别（适合只读一次的数据）
+- **ZFILL 变体**：支持条件拷贝，predicate 为 false 时用零填充
+
+**ZFILL 变体**（见 `copy_sm80.hpp:100-157`）：
 
 ```cpp
-struct SM75_U32x4_LDSM_N
+template <class TS, class TD = TS>
+struct SM80_CP_ASYNC_CACHEALWAYS_ZFILL
 {
-  using SRegisters = uint128_t[1];
-  using DRegisters = uint32_t[4];
+  using SRegisters = TS[1];
+  using DRegisters = TD[1];
 
-  CUTE_HOST_DEVICE static void
-  copy(uint128_t const& smem_src,
-       uint32_t& dst0, uint32_t& dst1, uint32_t& dst2, uint32_t& dst3)
-  {
-#if defined(CUTE_ARCH_LDSM_SM75_ACTIVATED)
-    uint32_t smem_int_ptr = cast_smem_ptr_to_uint(&smem_src);
-    asm volatile ("ldmatrix.sync.aligned.x4.m8n8.shared.b16 {%0, %1, %2, %3}, [%4];\n"
-        : "=r"(dst0), "=r"(dst1), "=r"(dst2), "=r"(dst3)
-        :  "r"(smem_int_ptr));
-#else
-    CUTE_INVALID_CONTROL_PATH("Trying to use ldmatrix without CUTE_ARCH_LDSM_SM75_ACTIVATED.");
+  CUTE_HOST_DEVICE static void
+  copy(TS const& gmem_src, TD& smem_dst, bool pred)
+  {
+    int src_size = pred ? sizeof(TS) : 0;
+    asm volatile("cp.async.ca.shared.global.L2::128B [%0], [%1], %2, %3;\n"
+        :: "r"(smem_int_ptr), "l"(gmem_ptr), "n"(sizeof(TS)), "r"(src_size));
+    //                                                    ^^^^^^^^^^^^^^^
+    //                    当 pred=false 时 src_size=0，硬件用零填充
+  }
+};
+```
+
+配套的同步指令封装：
+
+```cpp
+// 提交一组 cp.async 操作
+CUTE_HOST_DEVICE void cp_async_fence() {
+  asm volatile("cp.async.commit_group;\n" ::);
+}
+
+// 等待，直到最多 N 组未完成
+template <int N>
+CUTE_HOST_DEVICE void cp_async_wait() {
+  if constexpr (N == 0) {
+    asm volatile("cp.async.wait_all;\n" ::);
+  } else {
+    asm volatile("cp.async.wait_group %0;\n" :: "n"(N));
+  }
+}
+```
+
+### 2.4 Turing 架构：ldmatrix（SM75）
+
+`ldmatrix` 是 Turing 架构引入的 warp 级矩阵加载指令，专门为 MMA 优化——它能按照 MMA 所需的寄存器分布从共享内存加载数据（见 `include/cute/arch/copy_sm75.hpp:81-99`）：
+
+```cpp
+struct SM75_U32x1_LDSM_N
+{
+  using SRegisters = uint128_t[1];  // 1 个 128-bit 源（smem 地址）
+  using DRegisters = uint32_t[1];   // 1 个 32-bit 目标（寄存器）
+
+  CUTE_HOST_DEVICE static void
+  copy(uint128_t const& smem_src, uint32_t& dst)
+  {
+#if defined(CUTE_ARCH_LDSM_SM75_ACTIVATED)
+    uint32_t smem_int_ptr = cast_smem_ptr_to_uint(&smem_src);
+    asm volatile("ldmatrix.sync.aligned.x1.m8n8.shared.b16 {%0}, [%1];\n"
+        : "=r"(dst)
+        :  "r"(smem_int_ptr));
 #endif
-  }
+  }
+};
+
+// x2 变体：加载 2 个 8x8 矩阵
+struct SM75_U32x2_LDSM_N
+{
+  using SRegisters = uint128_t[1];  // 1 个 128-bit 源地址
+  using DRegisters = uint32_t[2];   // 2 个 32-bit 目标
+
+  CUTE_HOST_DEVICE static void
+  copy(uint128_t const& smem_src, uint32_t& dst0, uint32_t& dst1)
+  {
+    asm volatile("ldmatrix.sync.aligned.x2.m8n8.shared.b16 {%0, %1}, [%2];\n"
+        : "=r"(dst0), "=r"(dst1)
+        :  "r"(smem_int_ptr));
+  }
 };
 ```
 
-TMA 拷贝，异步拷贝，单个线程可以拷贝大量数据。从 gmem 到 smem。或从 smem 到 gmem。
+**`ldmatrix` 的关键特性**：
+- **warp 协作**：32 个线程协作，每个线程提供一个 smem 地址，硬件按照 8×8 矩阵的布局将数据分发到各线程的寄存器
+- **`x1/x2/x4`**：分别加载 1/2/4 个 8×8 矩阵
+- **`.N` vs `.T`**：`.N`（normal）和 `.T`（transpose）变体控制加载时的转置行为
+- **与 MMA 对齐**：`ldmatrix` 的输出分布正好匹配 `mma.sync` 指令对 A/B 矩阵的寄存器分布要求
+
+### 2.5 Hopper 架构：TMA（SM90）
+
+Hopper 架构引入了 **TMA（Tensor Memory Accelerator）**，这是对 copy 抽象的最大变革。TMA 通过描述符（TensorMap）描述一个多维张量，硬件自动处理地址计算、边界检查和 swizzle（见 `include/cute/arch/copy_sm90_tma.hpp:47-101`）：
 
 ```cpp
-struct SM90_TMA_LOAD_2D
+struct SM90_TMA_LOAD_1D
 {
-  CUTE_HOST_DEVICE static void
-  copy(void const* desc_ptr, uint64_t* mbar_ptr, uint64_t cache_hint,
-       void      * smem_ptr,
-       int32_t const& crd0, int32_t const& crd1)
-  {
-#if defined(CUTE_ARCH_TMA_SM90_ENABLED)
-    uint64_t gmem_int_desc = reinterpret_cast<uint64_t>(desc_ptr);
-    uint32_t smem_int_mbar = cast_smem_ptr_to_uint(mbar_ptr);
-    uint32_t smem_int_ptr  = cast_smem_ptr_to_uint(smem_ptr);
-    cutlass::arch::synclog_emit_tma_load(__LINE__, gmem_int_desc, smem_int_mbar, smem_int_ptr);
-#if defined(CUTE_ARCH_TMA_SM120_ENABLED)
-    asm volatile (
-      "cp.async.bulk.tensor.2d.shared::cta.global.mbarrier::complete_tx::bytes.L2::cache_hint"
-      " [%0], [%1, {%3, %4}], [%2], %5;"
-      :
-      : "r"(smem_int_ptr), "l"(gmem_int_desc), "r"(smem_int_mbar),
-        "r"(crd0), "r"(crd1), "l"(cache_hint)
-      : "memory");
-#else
-    asm volatile (
-      "cp.async.bulk.tensor.2d.shared::cluster.global.mbarrier::complete_tx::bytes.L2::cache_hint"
-      " [%0], [%1, {%3, %4}], [%2], %5;"
-      :
-      : "r"(smem_int_ptr), "l"(gmem_int_desc), "r"(smem_int_mbar),
-        "r"(crd0), "r"(crd1), "l"(cache_hint)
-      : "memory");
+  CUTE_HOST_DEVICE static void
+  copy(void const* desc_ptr,    // TMA 描述符（TensorMap）
+       uint64_t* mbar_ptr,      // mbarrier 指针（用于异步同步）
+       uint64_t cache_hint,     // L2 缓存提示
+       void* smem_ptr,          // 共享内存目标地址
+       int32_t const& crd0)     // 坐标（1D: 只有 crd0）
+  {
+#if defined(CUTE_ARCH_TMA_SM90_ENABLED)
+    uint64_t gmem_int_desc = reinterpret_cast<uint64_t>(desc_ptr);
+    uint32_t smem_int_mbar = cast_smem_ptr_to_uint(mbar_ptr);
+    uint32_t smem_int_ptr  = cast_smem_ptr_to_uint(smem_ptr);
+    asm volatile(
+      "cp.async.bulk.tensor.1d.shared::cluster.global.mbarrier::complete_tx::bytes.L2::cache_hint"
+      " [%0], [%1, {%3}], [%2], %4;"
+      :
+      : "r"(smem_int_ptr),       // smem 目标
+        "l"(gmem_int_desc),      // TMA 描述符
+        "r"(smem_int_mbar),      // mbarrier
+        "r"(crd0),               // 张量坐标
+        "l"(cache_hint)          // 缓存提示
+      : "memory");
 #endif
-#else
-    CUTE_INVALID_CONTROL_PATH("Trying to use tma without CUTE_ARCH_TMA_SM90_ENABLED.");
-#endif
-  }
+  }
 
-  struct PREFETCH
-  {
-    CUTE_HOST_DEVICE static void
-    copy(void const* desc_ptr,
-         int32_t const& crd0, int32_t const& crd1)
-    {
-  #if defined(CUTE_ARCH_TMA_SM90_ENABLED)
-      uint64_t gmem_int_desc = reinterpret_cast<uint64_t>(desc_ptr);
-      asm volatile (
-        "cp.async.bulk.prefetch.tensor.2d.L2.global"
-        " [%0, {%1, %2}];"
-        :
-        : "l"(gmem_int_desc),
-          "r"(crd0), "r"(crd1)
-        : "memory");
-  #else
-      CUTE_INVALID_CONTROL_PATH("Trying to use tma without CUTE_ARCH_TMA_SM90_ENABLED.");
-  #endif
-    }
-  };
+  // TMA 还支持 prefetch（预取到 L2）
+  struct PREFETCH {
+    CUTE_HOST_DEVICE static void
+    copy(void const* desc_ptr, int32_t const& crd0) {
+      asm volatile(
+        "cp.async.bulk.prefetch.tensor.1d.L2.global [%0, {%1}];"
+        : : "l"(gmem_int_desc), "r"(crd0) : "memory");
+    }
+  };
 };
 ```
 
-# copy tratis
+**TMA 的关键特性**：
+1. **描述符驱动**：通过 `TmaDescriptor`（TensorMap）描述全局内存中的张量形状、步长和 swizzle 模式，硬件自动计算地址
+2. **多维支持**：1D/2D/3D/4D/5D 变体，坐标通过参数传入
+3. **mbarrier 同步**：与共享内存屏障（mbarrier）配合，通过 `complete_tx::bytes` 机制自动通知拷贝完成
+4. **边界安全**：硬件自动处理越界访问（OOB），无需软件 predication
+5. **单线程发起**：`ThrID = Layout<_1>`，只需一个线程发起 TMA 指令
+6. **多播支持**：`SM90_TMA_LOAD_MULTICAST` 可以将数据同时拷贝到多个 SM 的共享内存
 
-在 PTX 拷贝指令上添加一些拷贝时需要的基本信息，比如线程数量，数据类型和分布等。
-
-UniversalCopy，只需要一个线程参与，所以 ThrID 是 1。SrcLayout 和 DstLayout，src 和 dst 的 tv-layout。一个线程对应一个 S 类型的数据。
+**TMA Store**（smem → gmem）类似，但不需要 mbarrier：
 
 ```cpp
-template <class S, class D>
-struct Copy_Traits<UniversalCopy<S,D>>
-{
-  // Logical thread id to thread idx (one-thread)
-  using ThrID = Layout<_1>;
-
-  // Map from (src-thr,src-val) to bit
-  using SrcLayout = Layout<Shape<_1,Int<sizeof_bits<S>::value>>>;
-  // Map from (dst-thr,dst-val) to bit
-  using DstLayout = Layout<Shape<_1,Int<sizeof_bits<D>::value>>>;
-
-  // Reference map from (thr,val) to bit
-  using RefLayout = SrcLayout;
+struct SM90_TMA_STORE {
+  CUTE_HOST_DEVICE static void
+  copy(void const* desc_ptr, void const* smem_ptr,
+       int32_t const& crd0, int32_t const& crd1, ...) {
+    asm volatile(
+      "cp.async.bulk.tensor.2d.global.shared::cta [%0, {%2, %3}], [%1];"
+      : : "l"(gmem_int_desc), "r"(smem_int_ptr),
+          "r"(crd0), "r"(crd1) : "memory");
+  }
 };
 ```
 
-cp.async，异步拷贝 traits。只需要一个线程参与，也是一个线程对应 S 类型的字节数。
+**TMA Reduce**（smem → gmem 带归约）：
 
 ```cpp
-template <class S, class D>
-struct Copy_Traits<SM80_CP_ASYNC_CACHEALWAYS<S,D>>
-{
-  // Logical thread id to thread idx (one-thread)
-  using ThrID = Layout<_1>;
-
-  // Map from (src-thr,src-val) to bit
-  using SrcLayout = Layout<Shape<_1,Int<sizeof_bits<S>::value>>>;
-  // Map from (dst-thr,dst-val) to bit
-  using DstLayout = Layout<Shape<_1,Int<sizeof_bits<D>::value>>>;
-
-  // Reference map from (thr,val) to bit
-  using RefLayout = SrcLayout;
+struct SM90_TMA_REDUCE_ADD {
+  // 将 smem 中的数据加到 gmem 中（原子归约）
+  CUTE_HOST_DEVICE static void
+  copy(void const* desc_ptr, void const* smem_ptr,
+       int32_t const& crd0, int32_t const& crd1, ...) {
+    asm volatile(
+      "cp.async.bulk.tensor.2d.global.shared::cta.add ..."
+      ...);
+  }
 };
 ```
 
-ldmatrix，warp 级别的拷贝，一个指令需要一个 warp 的 32 个线程参与。对于 x4 类型，读取数据时，一个线程对应一行 128bit 的元素，所以 tv-layout 是(32,128)，stride 是(128,1)。
+### 2.6 Hopper 架构：Bulk Copy（SM90）
 
-保存数据时，32 个线程交错保存。一个线程保存 32*4 个 bit，所以 layout 是(32,(32,4))。
+除了 TMA，Hopper 还引入了 `cp.async.bulk`（Bulk Copy），用于大块数据的异步拷贝，不依赖 TMA 描述符（见 `copy_traits_sm90_tma.hpp:548-637`）：
 
 ```cpp
-template <>
-struct Copy_Traits<SM75_U32x4_LDSM_N>
-{
-  // Logical thread id to thread idx (warp)
-  using ThrID = Layout<_32>;
+// G2S: Global to Shared
+struct SM90_BULK_COPY_G2S {
+  CUTE_HOST_DEVICE static void
+  copy(void const* gmem_ptr, uint64_t* mbar_ptr,
+       void* smem_ptr, int32_t num_bytes) {
+    asm volatile(
+      "cp.async.bulk.shared::cluster.global.mbarrier::complete_tx::bytes "
+      "[%0], [%1], %2, [%3];"
+      : : "r"(smem_int_ptr), "l"(gmem_int_ptr),
+          "r"(num_bytes), "r"(smem_int_mbar) : "memory");
+  }
+};
 
-  // Map from (src-thr,src-val) to bit
-  using SrcLayout = Layout<Shape < _32,_128>,
-                           Stride<_128,  _1>>;
-  // Map from (dst-thr,dst-val) to bit
-  using DstLayout = Layout<Shape <_32,Shape <_32,   _4>>,
-                           Stride<_32,Stride< _1,_1024>>>;
-
-  // Reference map from (thr,val) to bit
-  using RefLayout = DstLayout;
+// S2G: Shared to Global
+struct SM90_BULK_COPY_S2G {
+  CUTE_HOST_DEVICE static void
+  copy(void const* smem_ptr, void* gmem_ptr, int32_t num_bytes) {
+    asm volatile(
+      "cp.async.bulk.global.shared::cta [%0], [%1], %2;"
+      : : "l"(gmem_int_ptr), "r"(smem_int_ptr),
+          "r"(num_bytes) : "memory");
+  }
 };
 ```
 
-# copy atom
+---
 
-copy 的最小单位，由 Copy_Traits 组成。
+## 3. Copy Traits
+
+为 Operation 注入位级布局语义。
+
+### 3.1 为什么需要 Traits？为什么用"比特"？
+
+Copy Operation 只知道"执行一次 copy 需要哪些寄存器"，但**不知道**：
+- 这些寄存器中的元素如何映射到源/目标张量的坐标？
+- 多个线程如何协作完成拷贝？
+- 源和目标的线程-值映射不同时如何转换？
+
+**Copy Traits** 的职责就是回答这些问题——它为每个 Copy Operation 定义了**线程-值到比特（bit）的映射布局**。
+
+**为什么用比特而不是坐标？** 因为 Copy 需要处理各种位宽的数据（4-bit, 8-bit, 16-bit, 32-bit, 64-bit, 128-bit），用比特作为通用单位可以统一描述。Copy Atom 会通过 `recast_layout` 将位级布局转换为实际值类型的布局。
+
+### 3.2 Copy Traits 的概念接口
+
+Copy Traits 遵循一个 concept（见 `include/cute/atom/copy_traits.hpp:40-57`）：
 
 ```cpp
-template <class... Args, class CopyInternalType>
-struct Copy_Atom<Copy_Traits<Args...>, CopyInternalType>
-  : Copy_Traits<Args...>
+/**
+ * concept Copy_Traits
+ * {
+ *   using ThrID     =    // 逻辑线程 ID -> 物理线程索引
+ *
+ *   using SrcLayout =    // (src-tid, src-vid) -> bit
+ *   using DstLayout =    // (dst-tid, dst-vid) -> bit
+ *   using RefLayout =    // (ref-tid, ref-vid) -> bit   <-- 关键！
+ * };
+ *
+ * Copy_Traits 的抽象比特序是任意的，仅用于构造映射：
+ *   (ref-tid, ref-vid) -> (src-tid, src-vid)
+ *   (ref-tid, ref-vid) -> (dst-tid, dst-vid)
+ * TiledCopy 中的 Layout_TV 遵循 RefLayout，按需映射到 Src 或 Dst 的 (tid,vid) 表示。
+ */
+```
+
+**三个布局的含义**：
+
+| 布局 | 含义 | 用途 |
+|------|------|------|
+| `SrcLayout` | (源线程, 源值) → 比特 | 描述源数据的线程-值分布 |
+| `DstLayout` | (目标线程, 目标值) → 比特 | 描述目标数据的线程-值分布 |
+| `RefLayout` | (参考线程, 参考值) → 比特 | **桥梁**：TiledCopy 的标准表示 |
+
+**RefLayout 的作用**：当 Src 和 Dst 的线程-值分布不同时（如 `ldmatrix`），需要一个"参考"分布作为中间桥梁。TiledCopy 内部使用 RefLayout 坐标，然后在执行时映射到 SrcLayout 或 DstLayout。通常 `RefLayout = SrcLayout`（以源为参考），但也可以是 DstLayout。
+
+### 3.3 UniversalCopy 的 Traits
+
+最简单的 Traits（见 `copy_traits.hpp:65-78`）：
+
+```cpp
+template <class S, class D>
+struct Copy_Traits<UniversalCopy<S,D>>
 {
-  using Traits = Copy_Traits<Args...>;
+  using ThrID = Layout<_1>;   // 单线程
 
-  // Bit and Thr layouts from the Copy_Traits
-  using ThrID        = typename Traits::ThrID;
-  using BitLayoutSrc = typename Traits::SrcLayout;
-  using BitLayoutDst = typename Traits::DstLayout;
-  using BitLayoutRef = typename Traits::RefLayout;
+  // (src-thr, src-val) -> bit: 1 个线程, sizeof(S) 个比特
+  using SrcLayout = Layout<Shape<_1, Int<sizeof_bits<S>::value>>>;
+  // (dst-thr, dst-val) -> bit: 1 个线程, sizeof(D) 个比特
+  using DstLayout = Layout<Shape<_1, Int<sizeof_bits<D>::value>>>;
 
-  using ValType = CopyInternalType;
-
-  using ValLayoutSrc = decltype(recast_layout<uint1_t, ValType>(BitLayoutSrc{}));
-  using ValLayoutDst = decltype(recast_layout<uint1_t, ValType>(BitLayoutDst{}));
-  using ValLayoutRef = decltype(recast_layout<uint1_t, ValType>(BitLayoutRef{}));
-
-  CUTE_STATIC_ASSERT_V(size<0>(ValLayoutSrc{}) == size(ThrID{}), "CopyOperation is not valid for Src of ValType.");
-  CUTE_STATIC_ASSERT_V(size<0>(ValLayoutDst{}) == size(ThrID{}), "CopyOperation is not valid for Dst of ValType.");
-  CUTE_STATIC_ASSERT_V(size<0>(ValLayoutRef{}) == size(ThrID{}), "CopyOperation is not valid for Ref of ValType.");
-
-  static constexpr int NumValSrc = size<1>(ValLayoutSrc{});
-  static constexpr int NumValDst = size<1>(ValLayoutDst{});
-
-  // Additional Trait parameters/transformations
-  template <class... TraitsArgs>
-  CUTE_HOST_DEVICE
-  auto
-  with(TraitsArgs&&... args) const {
-    auto traits = Traits::with(static_cast<TraitsArgs&&>(args)...);
-    return Copy_Atom<decltype(traits), CopyInternalType>{traits};
-  }
-  ...
+  // 参考布局 = 源布局
+  using RefLayout = SrcLayout;
 };
 ```
 
-# tiled copy
+**解读**：对于 `UniversalCopy<half_t, half_t>`，`SrcLayout = Layout<Shape<_1, _16>>`，即 1 个线程拷贝 16 个比特（一个 half）。
 
-通过对 Copy_Atom 进行复制组成的 copy 块。需要三个参数，第一个是 Copy_Atom，确定使用哪一种指令进行拷贝。第二个参数是 LayoutCopy_TV，是一种 tv-layout，描述线程和对应元素的坐标之间的关系。通过对线程访问可以得到该线程对应元素在要拷贝 tensor 种的坐标，一般是通过右逆运算得到。ShapeTiler_MN 是 TiledCopy 的大小，也可以理解为坐标空间大小。
+### 3.4 SM80 cp.async 的 Traits
+
+`cp.async` 的 Traits 与 UniversalCopy 类似，因为每条指令只涉及一个线程拷贝一个值（见 `copy_traits_sm80.hpp:41-54`）：
 
 ```cpp
-template <class Copy_Atom,
-          class LayoutCopy_TV,  // (tid,vid) -> coord   [Need not be 2D...]
-          class ShapeTiler_MN>  // coord space
-struct TiledCopy : Copy_Atom
+template <class S, class D>
+struct Copy_Traits<SM80_CP_ASYNC_CACHEALWAYS<S,D>>
 {
-  // Layout information from the CopyAtom
-  using AtomThrID     = typename Copy_Atom::ThrID;        // thrid -> thr_idx
-  using AtomLayoutSrc = typename Copy_Atom::ValLayoutSrc; // (thr,val) -> offset
-  using AtomLayoutDst = typename Copy_Atom::ValLayoutDst; // (thr,val) -> offset
-  using AtomLayoutRef = typename Copy_Atom::ValLayoutRef; // (thr,val) -> offset
+  using ThrID = Layout<_1>;   // 单线程
 
-  using AtomNumThr = decltype(size<0>(AtomLayoutRef{}));
-  using AtomNumVal = decltype(size<1>(AtomLayoutRef{}));
+  // (src-thr, src-val) -> bit: 1 个线程, sizeof(S) 个比特
+  using SrcLayout = Layout<Shape<_1, Int<sizeof_bits<S>::value>>>;
+  // (dst-thr, dst-val) -> bit: 1 个线程, sizeof(D) 个比特
+  using DstLayout = Layout<Shape<_1, Int<sizeof_bits<D>::value>>>;
 
-  // Layout information for the TiledCopy
-  using Tiler_MN       = ShapeTiler_MN;
-  using TiledLayout_TV = LayoutCopy_TV;
-  using TiledNumThr    = decltype(size<0>(TiledLayout_TV{}));
-  using TiledNumVal    = decltype(size<1>(TiledLayout_TV{}));
-  ...
+  using RefLayout = SrcLayout;
 };
 ```
 
-## tidfrg_S
+**ZFILL 变体的特殊处理**（见 `copy_traits_sm80.hpp:71-117`）：
 
-对 TiledCopy 在 tensor 上进行 layout 变换，变成 thread layout 在第一维，value 在第二维的 layout。由 partition_S 调用。
-
-```cpp
-  // Tile a tensor or a layout from shape
-  //   (M,N,...)
-  // to shape
-  //   ((ThrV,ThrX),FrgV,(RestM,RestN,...))
-  // where
-  //   ThrV:  The threads local to a COPY_ATOM Src.
-  //   ThrX:  The threads tiled across COPY_ATOMs Src.
-  //   FrgV:  The values local to a COPY_ATOM Src.
-  //   RestM: The values tiled in M.
-  //   RestN: The values tiled in N.
-  template <class STensor>
-  CUTE_HOST_DEVICE constexpr static
-  auto
-  tidfrg_S(STensor&& stensor)
-  {
-    CUTE_STATIC_ASSERT_V(rank(stensor) >= rank(Tiler_MN{}), "Rank of tensor to be partitioned too small.");
-
-    // Tile the stensor and compute the (src-thr, src-val) -> (ref-thr, ref-val) layout
-    return tile2thrfrg(zipped_divide(stensor,Tiler_MN{}), right_inverse(AtomLayoutRef{}).compose(AtomLayoutSrc{}));
-  }
-```
-
-zipped_divide(stensor,Tiler_MN{})就是使用 TiledCopy 的大小对 stensor 进行分块，zipped_divide 后一个块中所有的元素在第一维，分成的块的 layout 在第二维。
-
-right_inverse(AtomLayoutRef{}).compose(AtomLayoutSrc{})。AtomLayoutRef{}是线程在 src 上的 tv 布局，通过 right_inverse 运算变成线程和坐标的 tv layout，并 compose 到原 shape 的形状。
-
-举个例子：
-
-以 ldmatrix x4 为例，Traits 中的 layout 如下：加载时按照 srclayout 加载，一个线程加载 128bit 的数据。如果数据类型是 fp16 的话就是一个线程加载 8 个 fp16，所以在 copy atom 中 recast 为 ValLayoutSrc = (_32,_8):(_8,_1)，也就是 tiledcopy 中的 AtomLayoutRef。
+ZFILL 变体引入了运行时参数 `pred`（布尔值，控制是否零填充），并重载了 `copy_unpack`：
 
 ```cpp
-  // Map from (src-thr,src-val) to bit
-  using SrcLayout = Layout<Shape < _32,_128>,
-                           Stride<_128,  _1>>;
-  // Map from (dst-thr,dst-val) to bit
-  using DstLayout = Layout<Shape <_32,Shape <_32,   _4>>,
-                           Stride<_32,Stride< _1,_1024>>>;
-```
-
-对 AtomLayoutRef 进行右逆运算。得到 right_inverse = (_8,_32):(_32,_1)。然后再与 AtomLayoutSrc 进行组合得到 compose = (_32,_8):(_1,_32)。
-
-下面是这三个 layout 的布局，从图中可以看到，AtomLayoutRef = (_32,_8):(_8,_1) 是线程和数据的布局，一行对应一个线程，一个线程加载 8 个连续的 float16。right_inverse = (_8,_32):(_32,_1) 是 AtomLayoutRef 中对应坐标的布局。compose = (_32,_8):(_1,_32) 是把右逆按照 AtomLayoutRef 的形状重排一下。可以看到此时一个线程对应的元素就是线程在 AtomLayoutRef 布局中的元素的坐标。
-
-```cpp
-(_32,_8):(_8,_1)
-        0     1     2     3     4     5     6     7
-    +-----+-----+-----+-----+-----+-----+-----+-----+
- 0  |   0 |   1 |   2 |   3 |   4 |   5 |   6 |   7 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
- 1  |   8 |   9 |  10 |  11 |  12 |  13 |  14 |  15 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
- 2  |  16 |  17 |  18 |  19 |  20 |  21 |  22 |  23 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
- 3  |  24 |  25 |  26 |  27 |  28 |  29 |  30 |  31 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
- 4  |  32 |  33 |  34 |  35 |  36 |  37 |  38 |  39 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
- 5  |  40 |  41 |  42 |  43 |  44 |  45 |  46 |  47 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
- 6  |  48 |  49 |  50 |  51 |  52 |  53 |  54 |  55 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
- 7  |  56 |  57 |  58 |  59 |  60 |  61 |  62 |  63 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
- 8  |  64 |  65 |  66 |  67 |  68 |  69 |  70 |  71 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
- 9  |  72 |  73 |  74 |  75 |  76 |  77 |  78 |  79 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
-  |  80 |  81 |  82 |  83 |  84 |  85 |  86 |  87 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
-  |  88 |  89 |  90 |  91 |  92 |  93 |  94 |  95 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
-  |  96 |  97 |  98 |  99 | 100 | 101 | 102 | 103 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
-  | 104 | 105 | 106 | 107 | 108 | 109 | 110 | 111 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
-  | 112 | 113 | 114 | 115 | 116 | 117 | 118 | 119 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
-  | 120 | 121 | 122 | 123 | 124 | 125 | 126 | 127 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
-  | 128 | 129 | 130 | 131 | 132 | 133 | 134 | 135 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
-  | 136 | 137 | 138 | 139 | 140 | 141 | 142 | 143 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
-  | 144 | 145 | 146 | 147 | 148 | 149 | 150 | 151 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
-  | 152 | 153 | 154 | 155 | 156 | 157 | 158 | 159 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
-  | 160 | 161 | 162 | 163 | 164 | 165 | 166 | 167 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
-  | 168 | 169 | 170 | 171 | 172 | 173 | 174 | 175 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
-  | 176 | 177 | 178 | 179 | 180 | 181 | 182 | 183 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
-  | 184 | 185 | 186 | 187 | 188 | 189 | 190 | 191 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
-  | 192 | 193 | 194 | 195 | 196 | 197 | 198 | 199 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
-  | 200 | 201 | 202 | 203 | 204 | 205 | 206 | 207 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
-  | 208 | 209 | 210 | 211 | 212 | 213 | 214 | 215 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
-  | 216 | 217 | 218 | 219 | 220 | 221 | 222 | 223 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
-  | 224 | 225 | 226 | 227 | 228 | 229 | 230 | 231 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
-  | 232 | 233 | 234 | 235 | 236 | 237 | 238 | 239 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
-  | 240 | 241 | 242 | 243 | 244 | 245 | 246 | 247 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
-  | 248 | 249 | 250 | 251 | 252 | 253 | 254 | 255 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
-
-(_8,_32):(_32,_1)
-        0     1     2     3     4     5     6     7     8     9    10    11    12    13    14    15    16    17    18    19    20    21    22    23    24    25    26    27    28    29    30    31
-    +-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+
- 0  |   0 |   1 |   2 |   3 |   4 |   5 |   6 |   7 |   8 |   9 |  10 |  11 |  12 |  13 |  14 |  15 |  16 |  17 |  18 |  19 |  20 |  21 |  22 |  23 |  24 |  25 |  26 |  27 |  28 |  29 |  30 |  31 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+
- 1  |  32 |  33 |  34 |  35 |  36 |  37 |  38 |  39 |  40 |  41 |  42 |  43 |  44 |  45 |  46 |  47 |  48 |  49 |  50 |  51 |  52 |  53 |  54 |  55 |  56 |  57 |  58 |  59 |  60 |  61 |  62 |  63 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+
- 2  |  64 |  65 |  66 |  67 |  68 |  69 |  70 |  71 |  72 |  73 |  74 |  75 |  76 |  77 |  78 |  79 |  80 |  81 |  82 |  83 |  84 |  85 |  86 |  87 |  88 |  89 |  90 |  91 |  92 |  93 |  94 |  95 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+
- 3  |  96 |  97 |  98 |  99 | 100 | 101 | 102 | 103 | 104 | 105 | 106 | 107 | 108 | 109 | 110 | 111 | 112 | 113 | 114 | 115 | 116 | 117 | 118 | 119 | 120 | 121 | 122 | 123 | 124 | 125 | 126 | 127 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+
- 4  | 128 | 129 | 130 | 131 | 132 | 133 | 134 | 135 | 136 | 137 | 138 | 139 | 140 | 141 | 142 | 143 | 144 | 145 | 146 | 147 | 148 | 149 | 150 | 151 | 152 | 153 | 154 | 155 | 156 | 157 | 158 | 159 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+
- 5  | 160 | 161 | 162 | 163 | 164 | 165 | 166 | 167 | 168 | 169 | 170 | 171 | 172 | 173 | 174 | 175 | 176 | 177 | 178 | 179 | 180 | 181 | 182 | 183 | 184 | 185 | 186 | 187 | 188 | 189 | 190 | 191 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+
- 6  | 192 | 193 | 194 | 195 | 196 | 197 | 198 | 199 | 200 | 201 | 202 | 203 | 204 | 205 | 206 | 207 | 208 | 209 | 210 | 211 | 212 | 213 | 214 | 215 | 216 | 217 | 218 | 219 | 220 | 221 | 222 | 223 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+
- 7  | 224 | 225 | 226 | 227 | 228 | 229 | 230 | 231 | 232 | 233 | 234 | 235 | 236 | 237 | 238 | 239 | 240 | 241 | 242 | 243 | 244 | 245 | 246 | 247 | 248 | 249 | 250 | 251 | 252 | 253 | 254 | 255 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+
-
-(_32,_8):(_1,_32)
-        0     1     2     3     4     5     6     7
-    +-----+-----+-----+-----+-----+-----+-----+-----+
- 0  |   0 |  32 |  64 |  96 | 128 | 160 | 192 | 224 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
- 1  |   1 |  33 |  65 |  97 | 129 | 161 | 193 | 225 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
- 2  |   2 |  34 |  66 |  98 | 130 | 162 | 194 | 226 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
- 3  |   3 |  35 |  67 |  99 | 131 | 163 | 195 | 227 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
- 4  |   4 |  36 |  68 | 100 | 132 | 164 | 196 | 228 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
- 5  |   5 |  37 |  69 | 101 | 133 | 165 | 197 | 229 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
- 6  |   6 |  38 |  70 | 102 | 134 | 166 | 198 | 230 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
- 7  |   7 |  39 |  71 | 103 | 135 | 167 | 199 | 231 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
- 8  |   8 |  40 |  72 | 104 | 136 | 168 | 200 | 232 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
- 9  |   9 |  41 |  73 | 105 | 137 | 169 | 201 | 233 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
-  |  10 |  42 |  74 | 106 | 138 | 170 | 202 | 234 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
-  |  11 |  43 |  75 | 107 | 139 | 171 | 203 | 235 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
-  |  12 |  44 |  76 | 108 | 140 | 172 | 204 | 236 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
-  |  13 |  45 |  77 | 109 | 141 | 173 | 205 | 237 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
-  |  14 |  46 |  78 | 110 | 142 | 174 | 206 | 238 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
-  |  15 |  47 |  79 | 111 | 143 | 175 | 207 | 239 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
-  |  16 |  48 |  80 | 112 | 144 | 176 | 208 | 240 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
-  |  17 |  49 |  81 | 113 | 145 | 177 | 209 | 241 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
-  |  18 |  50 |  82 | 114 | 146 | 178 | 210 | 242 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
-  |  19 |  51 |  83 | 115 | 147 | 179 | 211 | 243 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
-  |  20 |  52 |  84 | 116 | 148 | 180 | 212 | 244 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
-  |  21 |  53 |  85 | 117 | 149 | 181 | 213 | 245 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
-  |  22 |  54 |  86 | 118 | 150 | 182 | 214 | 246 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
-  |  23 |  55 |  87 | 119 | 151 | 183 | 215 | 247 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
-  |  24 |  56 |  88 | 120 | 152 | 184 | 216 | 248 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
-  |  25 |  57 |  89 | 121 | 153 | 185 | 217 | 249 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
-  |  26 |  58 |  90 | 122 | 154 | 186 | 218 | 250 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
-  |  27 |  59 |  91 | 123 | 155 | 187 | 219 | 251 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
-  |  28 |  60 |  92 | 124 | 156 | 188 | 220 | 252 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
-  |  29 |  61 |  93 | 125 | 157 | 189 | 221 | 253 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
-  |  30 |  62 |  94 | 126 | 158 | 190 | 222 | 254 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
-  |  31 |  63 |  95 | 127 | 159 | 191 | 223 | 255 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
-```
-
-最后将分块的结果和线程和坐标的 tv-layout 送到 tile2thrfrg 中计算。这里为啥要用线程和坐标的 tv-layout
-
-## tidfrg_D
-
-tidfrg_D 和 tidfrg_S 基本相同，区别就是这个函数是对 dst tensor 进行分块的。
-
-```cpp
-  // Tile a tensor or a layout from shape
-  //   (M,N,...)
-  // to shape
-  //   ((ThrV,ThrX),FrgV,(RestM,RestN,...))
-  // where
-  //   ThrV:  The threads local to a COPY_ATOM Dst.
-  //   ThrX:  The threads tiled across COPY_ATOMs Dst.
-  //   FrgV:  The values local to a COPY_ATOM Dst.
-  //   RestM: The values tiled in M.
-  //   RestN: The values tiled in N.
-  template <class DTensor>
-  CUTE_HOST_DEVICE constexpr static
-  auto
-  tidfrg_D(DTensor&& dtensor)
-  {
-    CUTE_STATIC_ASSERT_V(rank(dtensor) >= rank(Tiler_MN{}), "Rank of tensor to be partitioned too small.");
-
-    // Tile the dtensor and compute the (dst-thr, dst-val) -> (ref-thr, ref-val) layout
-    return tile2thrfrg(zipped_divide(dtensor,Tiler_MN{}), right_inverse(AtomLayoutRef{}).compose(AtomLayoutDst{}));
-  }
-```
-
-还是以 ldmatrix 为例，DstLayout = Layout<Shape <_32,Shape <_32,   _4>>, Stride<_32,Stride< _1,_1024>>>，float16 类型的话会 recast 成(_32,(_2,_4)):(_2,(_1,_64))，layout 如下所示。
-
-![](/assets/cute-tilled-copy/image.png)
-
-src 的右逆是 (_8,_32):(_32,_1)，将 src 的右逆按照 dst 的 layout 组合得到((_4,_8),(_2,_4)):((_64,_1),(_32,_8))，其中的元素就是对应位置上的元素在 src layout 中的坐标？
-
-```cpp
-(_32,(_2,_4)):(_2,(_1,_64))
-        0     1     2     3     4     5     6     7
-    +-----+-----+-----+-----+-----+-----+-----+-----+
- 0  |   0 |   1 |  64 |  65 | 128 | 129 | 192 | 193 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
- 1  |   2 |   3 |  66 |  67 | 130 | 131 | 194 | 195 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
- 2  |   4 |   5 |  68 |  69 | 132 | 133 | 196 | 197 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
- 3  |   6 |   7 |  70 |  71 | 134 | 135 | 198 | 199 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
- 4  |   8 |   9 |  72 |  73 | 136 | 137 | 200 | 201 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
- 5  |  10 |  11 |  74 |  75 | 138 | 139 | 202 | 203 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
- 6  |  12 |  13 |  76 |  77 | 140 | 141 | 204 | 205 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
- 7  |  14 |  15 |  78 |  79 | 142 | 143 | 206 | 207 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
- 8  |  16 |  17 |  80 |  81 | 144 | 145 | 208 | 209 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
- 9  |  18 |  19 |  82 |  83 | 146 | 147 | 210 | 211 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
-  |  20 |  21 |  84 |  85 | 148 | 149 | 212 | 213 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
-  |  22 |  23 |  86 |  87 | 150 | 151 | 214 | 215 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
-  |  24 |  25 |  88 |  89 | 152 | 153 | 216 | 217 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
-  |  26 |  27 |  90 |  91 | 154 | 155 | 218 | 219 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
-  |  28 |  29 |  92 |  93 | 156 | 157 | 220 | 221 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
-  |  30 |  31 |  94 |  95 | 158 | 159 | 222 | 223 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
-  |  32 |  33 |  96 |  97 | 160 | 161 | 224 | 225 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
-  |  34 |  35 |  98 |  99 | 162 | 163 | 226 | 227 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
-  |  36 |  37 | 100 | 101 | 164 | 165 | 228 | 229 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
-  |  38 |  39 | 102 | 103 | 166 | 167 | 230 | 231 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
-  |  40 |  41 | 104 | 105 | 168 | 169 | 232 | 233 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
-  |  42 |  43 | 106 | 107 | 170 | 171 | 234 | 235 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
-  |  44 |  45 | 108 | 109 | 172 | 173 | 236 | 237 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
-  |  46 |  47 | 110 | 111 | 174 | 175 | 238 | 239 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
-  |  48 |  49 | 112 | 113 | 176 | 177 | 240 | 241 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
-  |  50 |  51 | 114 | 115 | 178 | 179 | 242 | 243 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
-  |  52 |  53 | 116 | 117 | 180 | 181 | 244 | 245 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
-  |  54 |  55 | 118 | 119 | 182 | 183 | 246 | 247 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
-  |  56 |  57 | 120 | 121 | 184 | 185 | 248 | 249 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
-  |  58 |  59 | 122 | 123 | 186 | 187 | 250 | 251 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
-  |  60 |  61 | 124 | 125 | 188 | 189 | 252 | 253 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
-  |  62 |  63 | 126 | 127 | 190 | 191 | 254 | 255 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
-
-(_8,_32):(_32,_1)
-        0     1     2     3     4     5     6     7     8     9    10    11    12    13    14    15    16    17    18    19    20    21    22    23    24    25    26    27    28    29    30    31
-    +-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+
- 0  |   0 |   1 |   2 |   3 |   4 |   5 |   6 |   7 |   8 |   9 |  10 |  11 |  12 |  13 |  14 |  15 |  16 |  17 |  18 |  19 |  20 |  21 |  22 |  23 |  24 |  25 |  26 |  27 |  28 |  29 |  30 |  31 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+
- 1  |  32 |  33 |  34 |  35 |  36 |  37 |  38 |  39 |  40 |  41 |  42 |  43 |  44 |  45 |  46 |  47 |  48 |  49 |  50 |  51 |  52 |  53 |  54 |  55 |  56 |  57 |  58 |  59 |  60 |  61 |  62 |  63 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+
- 2  |  64 |  65 |  66 |  67 |  68 |  69 |  70 |  71 |  72 |  73 |  74 |  75 |  76 |  77 |  78 |  79 |  80 |  81 |  82 |  83 |  84 |  85 |  86 |  87 |  88 |  89 |  90 |  91 |  92 |  93 |  94 |  95 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+
- 3  |  96 |  97 |  98 |  99 | 100 | 101 | 102 | 103 | 104 | 105 | 106 | 107 | 108 | 109 | 110 | 111 | 112 | 113 | 114 | 115 | 116 | 117 | 118 | 119 | 120 | 121 | 122 | 123 | 124 | 125 | 126 | 127 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+
- 4  | 128 | 129 | 130 | 131 | 132 | 133 | 134 | 135 | 136 | 137 | 138 | 139 | 140 | 141 | 142 | 143 | 144 | 145 | 146 | 147 | 148 | 149 | 150 | 151 | 152 | 153 | 154 | 155 | 156 | 157 | 158 | 159 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+
- 5  | 160 | 161 | 162 | 163 | 164 | 165 | 166 | 167 | 168 | 169 | 170 | 171 | 172 | 173 | 174 | 175 | 176 | 177 | 178 | 179 | 180 | 181 | 182 | 183 | 184 | 185 | 186 | 187 | 188 | 189 | 190 | 191 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+
- 6  | 192 | 193 | 194 | 195 | 196 | 197 | 198 | 199 | 200 | 201 | 202 | 203 | 204 | 205 | 206 | 207 | 208 | 209 | 210 | 211 | 212 | 213 | 214 | 215 | 216 | 217 | 218 | 219 | 220 | 221 | 222 | 223 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+
- 7  | 224 | 225 | 226 | 227 | 228 | 229 | 230 | 231 | 232 | 233 | 234 | 235 | 236 | 237 | 238 | 239 | 240 | 241 | 242 | 243 | 244 | 245 | 246 | 247 | 248 | 249 | 250 | 251 | 252 | 253 | 254 | 255 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+
-
-((_4,_8),(_2,_4)):((_64,_1),(_32,_8))
-        0     1     2     3     4     5     6     7
-    +-----+-----+-----+-----+-----+-----+-----+-----+
- 0  |   0 |  32 |   8 |  40 |  16 |  48 |  24 |  56 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
- 1  |  64 |  96 |  72 | 104 |  80 | 112 |  88 | 120 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
- 2  | 128 | 160 | 136 | 168 | 144 | 176 | 152 | 184 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
- 3  | 192 | 224 | 200 | 232 | 208 | 240 | 216 | 248 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
- 4  |   1 |  33 |   9 |  41 |  17 |  49 |  25 |  57 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
- 5  |  65 |  97 |  73 | 105 |  81 | 113 |  89 | 121 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
- 6  | 129 | 161 | 137 | 169 | 145 | 177 | 153 | 185 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
- 7  | 193 | 225 | 201 | 233 | 209 | 241 | 217 | 249 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
- 8  |   2 |  34 |  10 |  42 |  18 |  50 |  26 |  58 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
- 9  |  66 |  98 |  74 | 106 |  82 | 114 |  90 | 122 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
-  | 130 | 162 | 138 | 170 | 146 | 178 | 154 | 186 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
-  | 194 | 226 | 202 | 234 | 210 | 242 | 218 | 250 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
-  |   3 |  35 |  11 |  43 |  19 |  51 |  27 |  59 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
-  |  67 |  99 |  75 | 107 |  83 | 115 |  91 | 123 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
-  | 131 | 163 | 139 | 171 | 147 | 179 | 155 | 187 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
-  | 195 | 227 | 203 | 235 | 211 | 243 | 219 | 251 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
-  |   4 |  36 |  12 |  44 |  20 |  52 |  28 |  60 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
-  |  68 | 100 |  76 | 108 |  84 | 116 |  92 | 124 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
-  | 132 | 164 | 140 | 172 | 148 | 180 | 156 | 188 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
-  | 196 | 228 | 204 | 236 | 212 | 244 | 220 | 252 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
-  |   5 |  37 |  13 |  45 |  21 |  53 |  29 |  61 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
-  |  69 | 101 |  77 | 109 |  85 | 117 |  93 | 125 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
-  | 133 | 165 | 141 | 173 | 149 | 181 | 157 | 189 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
-  | 197 | 229 | 205 | 237 | 213 | 245 | 221 | 253 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
-  |   6 |  38 |  14 |  46 |  22 |  54 |  30 |  62 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
-  |  70 | 102 |  78 | 110 |  86 | 118 |  94 | 126 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
-  | 134 | 166 | 142 | 174 | 150 | 182 | 158 | 190 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
-  | 198 | 230 | 206 | 238 | 214 | 246 | 222 | 254 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
-  |   7 |  39 |  15 |  47 |  23 |  55 |  31 |  63 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
-  |  71 | 103 |  79 | 111 |  87 | 119 |  95 | 127 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
-  | 135 | 167 | 143 | 175 | 151 | 183 | 159 | 191 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
-  | 199 | 231 | 207 | 239 | 215 | 247 | 223 | 255 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+
-```
-
-tile2thrfrg
-
-使用 copy atom 的 tv-layout 对 tensor 进行 tiling。这里的 tensor 的 layout 已经在前面的函数中被 tiledcopy 给 tiling 过了。
-
-```cpp
-  // Tile a tensor or a layout from shape
-  //   ((TileM,TileN,...), (RestM,RestN,...))
-  // to shape
-  //   ((ThrV,ThrX),FrgV,(RestM,RestN,...))
-  template <class Tensor, class Ref2TrgLayout>
-  CUTE_HOST_DEVICE constexpr static
-  auto
-  tile2thrfrg(Tensor&& tensor, Ref2TrgLayout const& ref2trg)
-  {
-    // Take the thrs/vals that the atom is interested in
-    // NOTE: Assumes the AtomNumThr are contiguous and identity within TiledThrID
-    auto atom_layout_TV = zipped_divide(TiledLayout_TV{}, make_shape(AtomNumThr{}, AtomNumVal{}));
-    // ((atom_tid,atom_val),(rest_tid,rest_val)) -> (m,n)
-
-    // Transform to the trg layout
-    auto trg_layout_TV = atom_layout_TV.compose(ref2trg, _);
-    // ((trg_tid,trg_val),(rest_tid,rest_val)) -> (m,n)
-
-    // Transform the thrs mode from thrid to thr_idx
-    // NOTE: Assumes the AtomNumThr are contiguous and identity within TiledThrID
-    auto thrval2mn = coalesce(zip(trg_layout_TV), Shape<_1,Shape<_1,_1>>{});
-    // ((trg_tid,rest_tid),(trg_val,rest_val)) -> (m,n)
-
-    /// ==================
-
-    // Transform the tile mode
-    auto tv_tensor = tensor.compose(thrval2mn, _);
-    // ((thrid,val),(RestM,RestN,...))
-
-    // Unfold and return
-    return tv_tensor(make_coord(_,_), _);
-  }
-```
-
-retile
-
-```cpp
-  // retile_S and retile_D assume they are working with the reference layout -- they are the same
-  template <class Tensor>
-  CUTE_HOST_DEVICE constexpr static
-  auto
-  retile(Tensor&& tensor)
-  {
-    constexpr int R = remove_cvref_t<Tensor>::rank;
-    // Assert that AtomLayoutSrc|Dst is identity so we can skip the Ref transformation
-
-    // Assume the first size<0>(tensor) elements are the first val_ids in TiledLayout_TV.
-    // Then, we only need the shape+layout of those size<0>(tensor) elements in TiledLayout_TV
-    //   and that shape is what we gather from the other modes of tensor
-
-    auto V = size<0>(tensor);
-
-    auto frg_layout_mn = upcast<TiledNumThr{} * V>(right_inverse(TiledLayout_TV{}).with_shape(shape(Tiler_MN{})));
-    // (m,n) -> v_idx -- The shape and order of the V inside of TiledLayout_TV
-
-    auto frg_layout_v = zipped_divide(logical_product(make_layout(V), right_inverse(frg_layout_mn)), make_layout(AtomNumVal{}));
-    // (atom_vals,rest_vals) -> (v,m,n)
-
-    /// =======
-
-    // Tile the tensor for TileFrg
-    auto t_tensor = zipped_divide(tensor, prepend(product_each(shape(frg_layout_mn)), V));
-    // ((TileV,TileM,TileN,...),(1,RestM,RestN,...))
-
-    // Transform the tile mode
-    auto v_tensor = t_tensor.compose(frg_layout_v, _);
-    // ((atom_vals,rest_vals),(1,RM,RN,...))
-
-    // Unfold and return
-    return v_tensor(_, append<R>(Int<0>{},_));
-  }
-```
-
-get_layoutS_TV
-
-```cpp
-  CUTE_HOST_DEVICE constexpr static
-  auto
-  get_layoutS_TV()
-  {
-    // (M,N) -> (M,N)
-    auto ref_S = make_layout(make_shape(shape(Tiler_MN{}), Int<1>{}));
-    // (thr_idx,val_idx) -> (M,N)
-    return tile2thrfrg(ref_S, right_inverse(AtomLayoutRef{}).compose(AtomLayoutSrc{}))(_,_,Int<0>{});
-  }
-```
-
-get_layoutD_TV
-
-```cpp
-  CUTE_HOST_DEVICE constexpr static
-  auto
-  get_layoutD_TV()
-  {
-    // (M,N) -> (M,N)
-    auto ref_D = make_layout(make_shape(shape(Tiler_MN{}), Int<1>{}));
-    // (thr_idx,val_idx) -> (M,N)
-    return tile2thrfrg(ref_D, right_inverse(AtomLayoutRef{}).compose(AtomLayoutDst{}))(_,_,Int<0>{});
-  }
-```
-
-get_slice
-
-```cpp
-  template <class ThrIdx,
-            __CUTE_REQUIRES(is_integral<ThrIdx>::value)>
-  CUTE_HOST_DEVICE static
-  auto
-  get_slice(ThrIdx const& thr_idx)
-  {
-    return ThrCopy<TiledCopy, ThrIdx>(thr_idx);
-  }
-```
-
-get_thread_slice
-
-```cpp
-  template <class ThrIdx,
-            __CUTE_REQUIRES(is_integral<ThrIdx>::value)>
-  CUTE_HOST_DEVICE  static
-  auto
-  get_thread_slice(ThrIdx const& thr_idx)
-  {
-    return get_slice(thr_idx);
-  }
-```
-
-# thread copy
-
-```cpp
-template <class TiledCopy, class ThrIdx>
-struct ThrCopy
+template <class S, class D>
+struct Copy_Traits<SM80_CP_ASYNC_CACHEALWAYS_ZFILL<S,D>>
 {
-  ThrIdx thr_idx_;
+  using ThrID = Layout<_1>;
+  using SrcLayout = Layout<Shape<_1, Int<sizeof_bits<S>::value>>>;
+  using DstLayout = Layout<Shape<_1, Int<sizeof_bits<D>::value>>>;
+  using RefLayout = SrcLayout;
 
-  CUTE_HOST_DEVICE
-  ThrCopy(ThrIdx const& thr_idx) : thr_idx_(thr_idx) {}
-  ...
+  // 运行时参数
+  bool pred = true;
+
+  // 通过 with() 构造带特定 pred 值的 Traits
+  CUTE_HOST_DEVICE constexpr
+  Copy_Traits<SM80_CP_ASYNC_CACHEALWAYS_ZFILL<S,D>>
+  with(bool pred) const {
+    return {pred};
+  }
+
+  // 重载 copy_unpack，将 pred 传入指令
+  template <class TS, class SLayout, class TD, class DLayout>
+  CUTE_HOST_DEVICE friend constexpr
+  void
+  copy_unpack(Copy_Traits const& traits,
+              Tensor<TS,SLayout> const& src,
+              Tensor<TD,DLayout>& dst)
+  {
+    static_assert(is_gmem<TS>::value, "Expected gmem source for cp.async.");
+    static_assert(is_smem<TD>::value, "Expected smem destination for cp.async.");
+
+    Tensor rS = recast<S>(src);
+    Tensor rD = recast<D>(dst);
+
+    CUTE_STATIC_ASSERT_V(size(rS) == Int<1>{});
+    CUTE_STATIC_ASSERT_V(size(rD) == Int<1>{});
+
+    // 关键：将 traits.pred 传入 copy 函数
+    SM80_CP_ASYNC_CACHEALWAYS_ZFILL<S,D>::copy(rS[0], rD[0], traits.pred);
+  }
+};
 ```
 
-partition_S
+**注意**：ZFILL 变体没有使用通用的 `copy_unpack`（通过 `detail::explode` 展开），而是直接在 Traits 中通过 friend 函数重载了 `copy_unpack`。这是因为 ZFILL 需要传递额外的 `pred` 参数。
+
+### 3.5 SM75 ldmatrix 的 Traits：多线程布局
+
+`ldmatrix` 是 warp 级指令，32 个线程协作，其 Traits 描述了复杂的线程-值分布（见 `copy_traits_sm75.hpp:41-56`）：
 
 ```cpp
-  template <class STensor>
-  CUTE_HOST_DEVICE
-  auto
-  partition_S(STensor&& stensor) const {
-    //static_assert(sizeof(typename remove_cvref_t<STensor>::value_type) == sizeof(typename TiledCopy::ValType),
-    //              "Expected ValType for tiling SrcTensor.");
-    auto thr_tensor = make_tensor(static_cast<STensor&&>(stensor).data(), TiledCopy::tidfrg_S(stensor.layout()));
-    return thr_tensor(thr_idx_, _, repeat<rank_v<STensor>>(_));
-  }
+template <>
+struct Copy_Traits<SM75_U32x1_LDSM_N>
+{
+  using ThrID = Layout<_32>;   // 32 线程（一个 warp）
 
-  template <class DTensor>
-  CUTE_HOST_DEVICE
-  auto
-  partition_D(DTensor&& dtensor) const {
-    //static_assert(sizeof(typename remove_cvref_t<DTensor>::value_type) == sizeof(typename TiledCopy::ValType),
-    //              "Expected ValType for tiling DstTensor.");
-    auto thr_tensor = make_tensor(static_cast<DTensor&&>(dtensor).data(), TiledCopy::tidfrg_D(dtensor.layout()));
-    return thr_tensor(thr_idx_, _, repeat<rank_v<DTensor>>(_));
-  }
+  // (src-thr, src-val) -> bit: (32, 1) 个 (thr,val) 对
+  // 源是共享内存，线程按 8x4 分布，每个线程提供 1 个 128-bit 地址
+  using SrcLayout = Layout<Shape <Shape <  _8, _4>, _128>,
+                           Stride<Stride<_128, _0>,  _1>>;
+  // 解读: Shape((8,4), 128)
+  //   - 线程维度: (8,4) = 32 个线程
+  //   - 值维度: 128 bits = 16 bytes = 1 个 uint128_t
+  //   - Stride: (128, 0), 1
+  //   - 线程 0 -> bit 0, 线程 1 -> bit 128, ..., 线程 8 -> bit 0 (但 val 不同)
+
+  // (dst-thr, dst-val) -> bit: (32, 32) 个 (thr,val) 对
+  // 目标是寄存器，每个线程获得 1 个 32-bit 寄存器
+  using DstLayout = Layout<Shape <_32, _32>,
+                           Stride<_32,  _1>>;
+  // 解读: 32 个线程，每个线程 32 bits = 1 个 uint32_t
+
+  // 参考布局 = 目标布局
+  using RefLayout = DstLayout;
+};
 ```
 
-retile_S
+**关键观察**：
+- `SrcLayout` 的线程维度是 `(8, 4)`，表示 32 个线程在源（共享内存）中按 8×4 网格排列
+- `DstLayout` 的线程维度是 `32`，表示目标（寄存器）中线程是线性排列
+- `RefLayout = DstLayout`：以目标（寄存器）分布为参考
+
+**`x2` 变体**（加载 2 个 8×8 矩阵）：
 
 ```cpp
-  template <class STensor>
-  CUTE_HOST_DEVICE static
-  auto
-  retile_S(STensor&& stensor) {
-    // static_assert(sizeof(typename remove_cvref_t<STensor>::value_type) == sizeof(typename TiledCopy::ValType),
-    //               "Expected ValType for tiling SrcTensor.");
-    return make_tensor(static_cast<STensor&&>(stensor).data(), TiledCopy::retile(stensor.layout()));
-  }
+template <>
+struct Copy_Traits<SM75_U32x2_LDSM_N>
+{
+  using ThrID = Layout<_32>;
 
-  template <class DTensor>
-  CUTE_HOST_DEVICE static
-  auto
-  retile_D(DTensor&& dtensor) {
-    // static_assert(sizeof(typename remove_cvref_t<DTensor>::value_type) == sizeof(typename TiledCopy::ValType),
-    //               "Expected ValType for tiling DstTensor.");
-    return make_tensor(static_cast<DTensor&&>(dtensor).data(), TiledCopy::retile(dtensor.layout()));
-  }
+  // 源: 32 线程，按 (16,2) 排列，每个线程 128 bits
+  using SrcLayout = Layout<Shape <Shape < _16, _2>, _128>,
+                           Stride<Stride<_128, _0>,  _1>>;
+  // 目标: 32 线程，每个线程 2×32 = 64 bits（2 个 uint32_t）
+  using DstLayout = Layout<Shape <_32, Shape <_32,   _2>>,
+                           Stride<_32, Stride< _1, _1024>>>;
+  using RefLayout = DstLayout;
+};
 ```
 
-# make_tiled_copy_impl
+### 3.6 SM90 TMA 的 Traits：描述符驱动的布局
 
-创建一个 tiled copy。参数分别是 copy atom，LayoutCopy_TV 和 Tiler。这里的 LayoutCopy_TV 是一个 tv-layout，第一维是 thread 的 layout，第二维是 thread 对应的数据的坐标。通过 threadIdx 可以得到一个线程对应的数据的坐标，通过坐标得到真实数据。
+TMA 的 Traits 是最复杂的，因为 TMA 指令通过描述符和坐标参数化，而非直接的数据指针（见 `copy_traits_sm90_tma.hpp:100-203`）：
 
 ```cpp
-template <class... Args,
-          class LayoutCopy_TV,
-          class Tiler>
+// 不可执行的 SM90_TMA_LOAD（有 tma_desc，但没有 tma_mbar）
+// 必须通过 .with(tma_mbar) 构造可执行版本
+template <class NumBitsPerTMA, class AuxParams_>
+struct Copy_Traits<SM90_TMA_LOAD, NumBitsPerTMA, AuxParams_>
+{
+  using ThrID     = Layout<_1>;   // 单线程发起
+  using SrcLayout = Layout<Shape<_1, NumBitsPerTMA>>;  // (1, NumBits) -> bit
+  using DstLayout = Layout<Shape<_1, NumBitsPerTMA>>;
+  using RefLayout = SrcLayout;
+
+  // TMA 描述符（TensorMap），存储在 Traits 中
+  TmaDescriptor tma_desc_;
+  using AuxParams = AuxParams_;
+  AuxParams aux_params_;   // 辅助参数（步长、swizzle 等）
+
+  // 获取 TMA 描述符
+  CUTE_HOST_DEVICE constexpr
+  TmaDescriptor const* get_tma_descriptor() const {
+    return &tma_desc_;
+  }
+
+  // 构造可执行版本：需要 mbarrier
+  CUTE_HOST_DEVICE constexpr
+  Copy_Traits<SM90_TMA_LOAD_OP, NumBitsPerTMA>
+  with(uint64_t& tma_mbar,
+       uint16_t const& multicast_mask = 0,
+       TMA::CacheHintSm90 const& cache_hint = TMA::CacheHintSm90::EVICT_NORMAL) const {
+    return {&tma_desc_, &tma_mbar, static_cast<uint64_t>(cache_hint)};
+  }
+
+  // 生成 TMA 坐标张量
+  template <class GShape>
+  CUTE_HOST_DEVICE constexpr
+  auto
+  get_tma_tensor(GShape const& g_shape) const {
+    static_assert(is_congruent<decltype(g_shape), decltype(aux_params_.g_stride_)>::value);
+    return make_coord_tensor(make_layout(g_shape, aux_params_.g_stride_));
+  }
+
+  // 禁止直接执行：必须先调用 .with()
+  template <class TS, class SLayout, class TD, class DLayout>
+  CUTE_HOST_DEVICE friend constexpr void
+  copy_unpack(Copy_Traits const&, Tensor<TS,SLayout> const&, Tensor<TD,DLayout>&) = delete;
+};
+```
+
+**关键设计**：
+1. **两阶段构造**：`SM90_TMA_LOAD`（不可执行，有描述符无 mbarrier）→ `SM90_TMA_LOAD_OP`（可执行，有描述符和 mbarrier）
+2. **`with()` 方法**：绑定 mbarrier 后返回可执行的 Traits
+3. **`get_tma_tensor()`**：根据全局形状生成坐标张量，用于后续分区
+4. **`NumBitsPerTMA`**：模板参数，表示单次 TMA 拷贝的比特数（如 1024 = 128 字节）
+
+**可执行版本的 `copy_unpack`**（见 `copy_traits_sm90_tma.hpp:65-92`）：
+
+```cpp
+template <class CopyOp, class... Args>
+struct TMA_LOAD_Unpack
+{
+  template <class TS, class SLayout, class TD, class DLayout>
+  CUTE_HOST_DEVICE friend constexpr void
+  copy_unpack(Copy_Traits<CopyOp, Args...> const& traits,
+              Tensor<TS,SLayout> const& src,
+              Tensor<TD,DLayout>& dst)
+  {
+    static_assert(is_smem<TD>::value, "SM90_TMA_LOAD requires the destination be shared memory.");
+
+    // src 张量存储的是 TMA 坐标
+    auto src_coord = src(Int<0>{});
+    void* dst_ptr = cute::raw_pointer_cast(dst.data());
+
+    // 将参数展开并调用底层 PTX 指令
+    return detail::explode_tuple(detail::CallCOPY<CopyOp>{},
+                                 traits.opargs_, tuple_seq<decltype(traits.opargs_)>{},
+                                 make_tuple(dst_ptr), seq<0>{},
+                                 src_coord, tuple_seq<decltype(src_coord)>{});
+  }
+};
+```
+
+**TMA 的 SrcLayout/DstLayout 为什么是 `Layout<Shape<_1, NumBitsPerTMA>>`？** 因为 TMA 是"单线程"指令——一个线程发起拷贝，硬件处理所有数据搬运。`NumBitsPerTMA` 表示这次 TMA 搬运的总比特数（如 128 字节 = 1024 比特）。线程-值映射的复杂性被隐藏在 TMA 描述符中。
+
+### 3.7 `copy_unpack`：从 Traits 到指令调用
+
+通用 `copy_unpack`（见 `copy_traits.hpp:108-136`）与 MMA 的 `mma_unpack` 类似：
+
+```cpp
+template <class AnyCPYTraits, class... TensorTypes>
+CUTE_HOST_DEVICE constexpr
+void
+copy_unpack(AnyCPYTraits const& traits,
+            Tensor<SEngine,SLayout> const& src,
+            Tensor<DEngine,DLayout>& dst)
+{
+  using CopyOp       = typename CPY_Op<AnyCPYTraits>::type;
+  using RegistersSrc = typename CopyOp::SRegisters;
+  using RegistersDst = typename CopyOp::DRegisters;
+  using RegTypeSrc   = typename remove_extent<RegistersSrc>::type;
+  using RegTypeDst   = typename remove_extent<RegistersDst>::type;
+  constexpr int RegNumSrc = extent<RegistersSrc>::value;
+  constexpr int RegNumDst = extent<RegistersDst>::value;
+
+  // 将张量重新转换为寄存器类型
+  Tensor rS = recast<RegTypeSrc>(src);
+  Tensor rD = recast<RegTypeDst>(dst);
+
+  // 静态断言数量匹配
+  CUTE_STATIC_ASSERT_V(size(rS) == Int<RegNumSrc>{});
+  CUTE_STATIC_ASSERT_V(size(rD) == Int<RegNumDst>{});
+
+  // 展开调用 CopyOp::copy(rS[0], rS[1], ..., rD[0], rD[1], ...)
+  detail::explode(detail::CallCOPY<CopyOp>{},
+                  rS, make_int_sequence<RegNumSrc>{},
+                  rD, make_int_sequence<RegNumDst>{});
+}
+```
+
+**`detail::CallCOPY<CopyOp>`** 是一个函数对象，调用 `CopyOp::copy(...)`。`detail::explode` 将寄存器数组展开为函数参数。
+
+**特殊重载**：某些 Traits（如 ZFILL、TMA）通过 friend 函数直接重载 `copy_unpack`，绕过通用版本，以传递额外的运行时参数（如 `pred`、`tma_mbar`）。
+
+## 4. Copy Atom
+
+### 4.1 Copy_Atom 的定义
+
+`Copy_Atom`（见 `copy_atom.hpp:44-176`）与 `MMA_Atom` 类似，但有一个关键区别：**Copy_Atom 需要额外的 `CopyInternalType` 参数**。
+
+```cpp
+template <class CopyOperation, class CopyInternalType>
+struct Copy_Atom<CopyOperation, CopyInternalType>
+  : Copy_Atom<Copy_Traits<CopyOperation>, CopyInternalType>
+{};
+
+template <class... Args, class CopyInternalType>
+struct Copy_Atom<Copy_Traits<Args...>, CopyInternalType>
+  : Copy_Traits<Args...>
+{
+  using Traits = Copy_Traits<Args...>;
+
+  // 从 Traits 引入位级布局
+  using ThrID        = typename Traits::ThrID;
+  using BitLayoutSrc = typename Traits::SrcLayout;
+  using BitLayoutDst = typename Traits::DstLayout;
+  using BitLayoutRef = typename Traits::RefLayout;
+
+  // 用户指定的值类型（如 half_t, float, uint8_t）
+  using ValType = CopyInternalType;
+
+  // 将位级布局转换为值级布局（通过 recast_layout）
+  using ValLayoutSrc = decltype(recast_layout<uint1_t, ValType>(BitLayoutSrc{}));
+  using ValLayoutDst = decltype(recast_layout<uint1_t, ValType>(BitLayoutDst{}));
+  using ValLayoutRef = decltype(recast_layout<uint1_t, ValType>(BitLayoutRef{}));
+
+  // 静态断言线程数匹配
+  CUTE_STATIC_ASSERT_V(size<0>(ValLayoutSrc{}) == size(ThrID{}));
+  CUTE_STATIC_ASSERT_V(size<0>(ValLayoutDst{}) == size(ThrID{}));
+  CUTE_STATIC_ASSERT_V(size<0>(ValLayoutRef{}) == size(ThrID{}));
+
+  // 每个原子拷贝的源/目标值数量
+  static constexpr int NumValSrc = size<1>(ValLayoutSrc{});
+  static constexpr int NumValDst = size<1>(ValLayoutDst{});
+
+  // with() 方法
+  template <class... TraitsArgs>
+  CUTE_HOST_DEVICE
+  auto
+  with(TraitsArgs&&... args) const {
+    auto traits = Traits::with(static_cast<TraitsArgs&&>(args)...);
+    return Copy_Atom<decltype(traits), CopyInternalType>{traits};
+  }
+  // ...
+};
+```
+
+**为什么需要 `CopyInternalType`？** Copy Traits 描述的是位级布局，但实际拷贝的数据有具体类型（如 `half_t`、`float`）。`CopyInternalType` 告诉 Atom "我们在拷贝什么类型的数据"，从而将位级布局 `recast` 为值级布局。
+
+例如：
+- `Copy_Atom<UniversalCopy<uint128_t>, half_t>`：用 128-bit 通用拷贝，但解释为 `half_t`（一次拷贝 8 个 half）
+- `Copy_Atom<SM80_CP_ASYNC_CACHEALWAYS<uint128_t>, half_t>`：用 `cp.async` 拷贝 128-bit，解释为 8 个 half
+
+**`recast_layout<uint1_t, ValType>` 的作用**：将比特布局重新解释为 `ValType` 布局。例如，对于 `ValType = half_t`（16-bit），`Layout<Shape<_1, _128>>`（128 比特）会变为 `Layout<Shape<_1, _8>>`（8 个 half_t）。
+
+### 4.2 调用接口：`call()`
+
+`Copy_Atom` 提供了两种 `call()` 重载（见 `copy_atom.hpp:90-175`）：
+
+```cpp
+// 两参数版本：src -> dst（无条件拷贝）
+template <class SEngine, class SLayout, class DEngine, class DLayout>
+CUTE_HOST_DEVICE
+void
+call(Tensor<SEngine,SLayout> const& src,
+     Tensor<DEngine,DLayout>& dst) const
+{
+  static_assert(SLayout::rank == 1, "Expected rank-1 src tensor");
+  static_assert(DLayout::rank == 1, "Expected rank-1 dst tensor");
+
+  // 检查 src/dst 大小是否匹配指令要求
+  if constexpr (is_constant<NumValSrc, decltype(size(src))>::value ||
+                is_constant<NumValDst, decltype(size(dst))>::value) {
+    // 大小匹配，执行指令
+    return copy_unpack(static_cast<Traits const&>(*this), src, dst);
+  } else if constexpr (is_tuple<decltype(shape(src))>::value &&
+                       is_tuple<decltype(shape(dst))>::value) {
+    // 大小不匹配但形状是 tuple，递归剥离外层模式
+    // ((A,B,C,...)) -> (A,B,C,...)
+    return copy(*this, tensor<0>(src), tensor<0>(dst));
+  } else {
+    static_assert(dependent_false<SEngine>,
+                  "CopyAtom: Src/Dst partitioning does not match the instruction requirement.");
+  }
+}
+```
+
+**递归剥离模式**：当传入的张量大小与指令要求不匹配，但形状是嵌套 tuple 时，`call` 会递归地剥离外层模式。这是一种常见的模式——分区后的张量可能有 `((V, M, N))` 的形状，需要先剥离外层，露出 `(V, M, N)`，然后对整个序列调用 `copy`。
+
+**带谓词的三参数版本**（见 `copy_atom.hpp:128-162`）：
+
+```cpp
+// 三参数版本：pred ? src -> dst : (zfill 或 不拷贝)
+template <class PEngine, class PLayout,
+          class SEngine, class SLayout,
+          class DEngine, class DLayout>
+CUTE_HOST_DEVICE
+void
+call(Tensor<PEngine,PLayout> const& prd,   // 谓词张量
+     Tensor<SEngine,SLayout> const& src,
+     Tensor<DEngine,DLayout>& dst) const
+{
+  static_assert(PLayout::rank == 1, "Expected rank-1 prd tensor");
+  static_assert(SLayout::rank == 1, "Expected rank-1 src tensor");
+  static_assert(DLayout::rank == 1, "Expected rank-1 dst tensor");
+
+  if constexpr (is_constant<NumValSrc, decltype(size(src))>::value ||
+                is_constant<NumValDst, decltype(size(dst))>::value) {
+    Traits const& traits = static_cast<Traits const&>(*this);
+    // 检查 Traits 是否支持 with(bool)
+    auto has_with_bool = cute::is_valid([](auto t)->void_t<decltype(t.with(true))>{}, traits);
+    if constexpr (has_with_bool) {
+      // 支持 ZFILL：用 with(pred[0]) 构造带谓词的 Traits
+      copy_unpack(traits.with(prd(Int<0>{})), src, dst);
+    } else {
+      // 不支持 ZFILL：运行时条件判断
+      if (prd(Int<0>{})) { copy_unpack(traits, src, dst); }
+    }
+  } else if constexpr (...) {
+    // 递归剥离
+    return copy_if(*this, tensor<0>(prd), tensor<0>(src), tensor<0>(dst));
+  }
+}
+```
+
+**谓词处理的两种路径**：
+1. **Traits 支持 `with(bool)`**（如 ZFILL 变体）：通过 `with(pred)` 构造一个带谓词的 Traits 副本，然后调用 `copy_unpack`。这样谓词被编译进指令（如 `cp.async` 的 ZFILL 模式）。
+2. **Traits 不支持 `with(bool)`**：运行时 `if (pred)` 判断，不满足时跳过拷贝。
+
+
+## 5. TiledCopy
+
+将 Atom 平铺成更大的拷贝单元。
+
+### 5.1 TiledCopy 的定义
+
+`TiledCopy`（见 `copy_atom.hpp:185-355`）将一个 `Copy_Atom` 与线程-值布局（TV Layout）和切片器（Tiler）组合：
+
+```cpp
+template <class Copy_Atom,
+          class LayoutCopy_TV,  // (tid,vid) -> coord
+          class ShapeTiler_MN>  // coord space
+struct TiledCopy : Copy_Atom
+{
+  // 从 Atom 引入信息
+  using AtomThrID     = typename Copy_Atom::ThrID;        // thrid -> thr_idx
+  using AtomLayoutSrc = typename Copy_Atom::ValLayoutSrc; // (thr,val) -> offset
+  using AtomLayoutDst = typename Copy_Atom::ValLayoutDst;
+  using AtomLayoutRef = typename Copy_Atom::ValLayoutRef;
+
+  using AtomNumThr = decltype(size<0>(AtomLayoutRef{}));  // 原子内线程数
+  using AtomNumVal = decltype(size<1>(AtomLayoutRef{}));  // 原子内值数
+
+  // 平铺后的信息
+  using Tiler_MN       = ShapeTiler_MN;
+  using TiledLayout_TV = LayoutCopy_TV;
+  using TiledNumThr    = decltype(size<0>(TiledLayout_TV{}));  // 总线程数
+  using TiledNumVal    = decltype(size<1>(TiledLayout_TV{}));  // 总值数
+
+  // 断言：平铺后的线程/值数必须是原子线程/值数的整数倍
+  CUTE_STATIC_ASSERT_V(TiledNumThr{} % AtomNumThr{} == Int<0>{});
+  CUTE_STATIC_ASSERT_V(TiledNumVal{} % AtomNumVal{} == Int<0>{});
+  // ...
+};
+```
+
+**与 TiledMMA 的关键区别**：
+- TiledMMA 通过 `AtomLayoutMNK` 参数自动计算 `ThrLayoutVMNK`
+- TiledCopy **直接接受** `LayoutCopy_TV` 和 `ShapeTiler_MN`，由用户（或工厂函数）提供
+
+### 5.2 `tidfrg_S` / `tidfrg_D`：线程-片段分区
+
+这两个函数（见 `copy_atom.hpp:218-281`）是 TiledCopy 的核心，将张量转换为线程-片段视图：
+
+```cpp
+// 将源张量分区为 (Thr, (FrgV, FrgX), (RestM, RestN, ...))
+template <class STensor>
+CUTE_HOST_DEVICE constexpr static
+auto
+tidfrg_S(STensor&& stensor)
+{
+  CUTE_STATIC_ASSERT_V(rank(stensor) >= rank(Tiler_MN{}));
+
+  // 第1步：用 Tiler 切分张量
+  // (M,N,...) -> ((TileM,TileN,...), (RestM,RestN,...))
+  auto tiled = zipped_divide(stensor, Tiler_MN{});
+
+  // 第2步：构造 Ref -> Src 的映射
+  // right_inverse(AtomLayoutRef) 将 Ref 的 (thr,val) 逆映射为线性索引
+  // .compose(AtomLayoutSrc) 再映射到 Src 的 (thr,val)
+  auto ref2src = right_inverse(AtomLayoutRef{}).compose(AtomLayoutSrc{});
+
+  // 第3步：调用 tile2thrfrg 完成转换
+  return tile2thrfrg(tiled, ref2src);
+}
+```
+
+**`tile2thrfrg` 的四步流程**（见 `copy_atom.hpp:254-281`）：
+
+```cpp
+template <class Tensor, class Ref2TrgLayout>
+CUTE_HOST_DEVICE constexpr static
+auto
+tile2thrfrg(Tensor&& tensor, Ref2TrgLayout const& ref2trg)
+{
+  // 第1步：将 TiledLayout_TV 按原子大小切分
+  // (tid,vid) -> (m,n) 切分为 ((atom_tid, atom_val), (rest_tid, rest_val)) -> (m,n)
+  auto atom_layout_TV = zipped_divide(TiledLayout_TV{}, make_shape(AtomNumThr{}, AtomNumVal{}));
+
+  // 第2步：应用 Ref -> Trg 映射（Src 或 Dst）
+  // 将参考布局转换为实际的源/目标布局
+  auto trg_layout_TV = atom_layout_TV.compose(ref2trg, _);
+  // ((trg_tid, trg_val), (rest_tid, rest_val)) -> (m,n)
+
+  // 第3步：重组维度，将线程和值分开
+  auto thrval2mn = coalesce(zip(trg_layout_TV), Shape<_1, Shape<_1,_1>>{});
+  // ((trg_tid, rest_tid), (trg_val, rest_val)) -> (m,n)
+
+  // 第4步：应用到张量
+  auto tv_tensor = tensor.compose(thrval2mn, _);
+  // ((thrid, val), (RestM, RestN, ...))
+
+  // 展开并返回
+  return tv_tensor(make_coord(_,_), _);
+  // (Thr, (FrgV, FrgX), (RestM, RestN, ...))
+}
+```
+
+**最终结果** `(Thr, (FrgV, FrgX), (RestM, RestN, ...))`：
+- **Thr**：逻辑线程 ID
+- **FrgV**：原子内每个线程的值（对应 AtomLayoutRef 的 val 维度）
+- **FrgX**：原子间每个线程的值（平铺产生的额外值）
+- **RestM, RestN**：超出 Tiler 范围的剩余部分
+
+### 5.3 `retile`：重新切片
+
+`retile`（见 `copy_atom.hpp:284-316`）用于将已按某种方式切片的张量重新切片为 Copy_Atom 所需的布局：
+
+```cpp
+template <class Tensor>
+CUTE_HOST_DEVICE constexpr static
+auto
+retile(Tensor&& tensor)
+{
+  constexpr int R = remove_cvref_t<Tensor>::rank;
+
+  auto V = size<0>(tensor);   // 当前片段的值数
+
+  // 第1步：找到 V 个值在 TiledLayout_TV 中的布局
+  auto frg_layout_mn = upcast<TiledNumThr{} * V>(
+      right_inverse(TiledLayout_TV{}).with_shape(shape(Tiler_MN{})));
+  // (m,n) -> v_idx
+
+  // 第2步：按原子值数切分
+  auto frg_layout_v = zipped_divide(
+      logical_product(make_layout(V), right_inverse(frg_layout_mn)),
+      make_layout(AtomNumVal{}));
+  // (atom_vals, rest_vals) -> (v, m, n)
+
+  // 第3步：切分张量
+  auto t_tensor = zipped_divide(tensor, prepend(product_each(shape(frg_layout_mn)), V));
+  // ((TileV, TileM, TileN, ...), (1, RestM, RestN, ...))
+
+  // 第4步：应用布局
+  auto v_tensor = t_tensor.compose(frg_layout_v, _);
+  // ((atom_vals, rest_vals), (1, RM, RN, ...))
+
+  // 展开并返回
+  return v_tensor(_, append<R>(Int<0>{}, _));
+}
+```
+
+**`retile` 的用途**：当数据已经按照某种方式分布在线程中（如 MMA 的寄存器分布），但需要用不同的 Copy_Atom 重新拷贝时，`retile` 可以将数据重新组织为 Copy_Atom 所需的分布。典型场景是 epilogue（后处理）阶段，将 MMA 输出的寄存器数据重新组织后存回全局内存。
+
+### 5.4 `get_layoutS_TV` / `get_layoutD_TV`：获取布局
+
+```cpp
+CUTE_HOST_DEVICE constexpr static
+auto
+get_layoutS_TV()
+{
+  // 创建参考布局：(M,N) -> (M,N)
+  auto ref_S = make_layout(make_shape(shape(Tiler_MN{}), Int<1>{}));
+  // 通过 tile2thrfrg 转换，然后切片到 (thr_idx, val_idx) -> (M,N)
+  return tile2thrfrg(ref_S, right_inverse(AtomLayoutRef{}).compose(AtomLayoutSrc{}))(_,_,Int<0>{});
+}
+
+CUTE_HOST_DEVICE constexpr static
+auto
+get_layoutD_TV()
+{
+  auto ref_D = make_layout(make_shape(shape(Tiler_MN{}), Int<1>{}));
+  return tile2thrfrg(ref_D, right_inverse(AtomLayoutRef{}).compose(AtomLayoutDst{}))(_,_,Int<0>{});
+}
+```
+
+**用途**：返回 `(thread_idx, val_idx) -> (M, N)` 的布局，描述哪个线程的哪个值对应源/目标张量的哪个坐标。与 TiledMMA 的 `get_layoutC_TV` 类似，用于可视化和与其他组件对接。
+
+### 5.5 `get_slice` / `get_thread_slice`：获取单线程视角
+
+```cpp
+template <class ThrIdx>
+CUTE_HOST_DEVICE static
+auto
+get_slice(ThrIdx const& thr_idx)
+{
+  return ThrCopy<TiledCopy, ThrIdx>(thr_idx);
+}
+
+template <class ThrIdx>
+CUTE_HOST_DEVICE static
+auto
+get_thread_slice(ThrIdx const& thr_idx)
+{
+  return get_slice(thr_idx);   // 别名
+}
+```
+
+## 6. ThrCopy
+
+单个线程视角的分区与执行。
+
+### 6.1 ThrCopy 的定义
+
+`ThrCopy`（见 `copy_atom.hpp:357-402`）比 `ThrMMA` 更简单——它只存储线程索引，不存储复杂的 VMNK 坐标：
+
+```cpp
+template <class TiledCopy, class ThrIdx>
+struct ThrCopy
+{
+  ThrIdx thr_idx_;
+
+  CUTE_HOST_DEVICE
+  ThrCopy(ThrIdx const& thr_idx) : thr_idx_(thr_idx) {}
+
+  // partition_S / partition_D ...
+  // retile_S / retile_D ...
+};
+```
+
+### 6.2 `partition_S` / `partition_D`：提取本线程的片段
+
+```cpp
+template <class STensor>
 CUTE_HOST_DEVICE
 auto
-make_tiled_copy_impl(Copy_Atom<Args...> const& atom,
-                     LayoutCopy_TV      const&,
-                     Tiler              const&)
-{
-  return TiledCopy<Copy_Atom<Args...>, LayoutCopy_TV, Tiler>{atom};
+partition_S(STensor&& stensor) const {
+  // 对张量布局执行 tidfrg_S
+  auto thr_tensor = make_tensor(static_cast<STensor&&>(stensor).data(),
+                                TiledCopy::tidfrg_S(stensor.layout()));
+  // thr_tensor: (Thr, (FrgV, FrgX), (RestM, RestN, ...))
+
+  // 用本线程索引切片，提取 (FrgV, FrgX, RestM, RestN, ...)
+  return thr_tensor(thr_idx_, _, repeat<rank_v<STensor>>(_));
 }
-```
 
-make_tiled_copy_A
-
-make_tiled_copy_B
-
-make_tiled_copy_C
-
-make_tiled_copy_C_atom
-
-# make_tiled_copy
-
-根据 thread layout 和 value layout 和 copy atom 生成一个 tiledcopy。
-
-第一个参数是 copy atom 表示使用哪种 copy 方式。第二个参数是 thread layout，表示一个 tiledcopy 里有多少线程，以及线程的布局。第二个参数是 value layout，表示一个线程加载的数据的布局。
-
-```cpp
-/** Produce a TiledCopy from logical thread and values layouts.
- * The thread and value layouts map coordinates to thr_idx and val_idx.
- *    The product of these layouts is taken to produce the TV layout and the Tiler.
- * Useful when threads and values need very specific mappings onto coordinates
- *    in the target tensors.
- */
-template <class... Args,
-          class ThrLayout,
-          class ValLayout = Layout<_1>>
+template <class DTensor>
 CUTE_HOST_DEVICE
 auto
-make_tiled_copy(Copy_Atom<Args...> const& copy_atom,
-                ThrLayout          const& thr_layout = {},     // (m,n) -> thr_idx
-                ValLayout          const& val_layout = {})     // (m,n) -> val_idx
-{
-  // Take the raked_products to compute the Layout_MN
-  // (M,N) -> (thr_idx, val_idx)
-  auto layout_mn = raked_product(thr_layout, val_layout);
-  // (thr_idx, val_idx) -> (M,N)
-  auto layout_tv = right_inverse(layout_mn).with_shape(make_shape(size(thr_layout), size(val_layout)));
-  // Tiler for extracting relevant elements
-  // (M,N) -> tensor coord
-  auto tiler = product_each(shape(layout_mn));
-
-#if 0
-  print("thr_layout: "); print(thr_layout); print("\n");
-  print("val_layout: "); print(val_layout); print("\n");
-  print("layout_mn : "); print(layout_mn);  print("\n");
-  print("layout_tv : "); print(layout_tv);  print("\n");
-  print("tiler     : "); print(tiler);      print("\n");
-#endif
-
-  return make_tiled_copy_impl(copy_atom, layout_tv, tiler);
+partition_D(DTensor&& dtensor) const {
+  auto thr_tensor = make_tensor(static_cast<DTensor&&>(dtensor).data(),
+                                TiledCopy::tidfrg_D(dtensor.layout()));
+  return thr_tensor(thr_idx_, _, repeat<rank_v<DTensor>>(_));
 }
 ```
 
-首先将 thr_layout 和 val_layout 进行 raked_product，得到完整的数据 layout，layout_mn，表示在 MN 方向上数据的布局是什么样的。
+**结果**：返回本线程负责的源/目标片段，形状为 `(FrgV, FrgX, RestM, RestN, ...)`。共享输入张量的数据指针（视图，非拷贝）。
 
-然后对 layout_mn 进行一个右逆运算。右逆运算得到一个布局，满足 layout(inv_layout(i)) = i 。右逆得到的是一个 flatten 的 layout，然后修改成(size(thr_layout), size(val_layout))的形状。
+### 6.3 `retile_S` / `retile_D`：静态重新切片
 
-然后计算 tiledcopy 的大小，也就是 tiler。
-
-最后调用 make_tiled_copy_impl。
-
-什么是右逆。
-
-以下面的代码为例：用 l1 表示线程的 layout，l2 表示 value 的 layout，进行 raked_product 后可以得到 layout rake，如下所示，此时一个线程占据(3,4)大小 block 的数据。
-
-对 rake 进行求逆后得到 rinv。此时满足 i = rake(rinv(i))，可以理解为 rinv 是 rake 的 offset 的一维坐标的 layout。通过坐标 i 对 rinv 进行索引可以得到一个值，这个值就是 rake 中 offset = i 的位置的坐标。
-
-换句话说，如果想得到 rake 中 offset = i 的位置的坐标，只需要计算 rinv(i)就行。
+这两个是**静态函数**（不需要 ThrCopy 实例），因为 retile 只依赖于 TiledCopy 的布局，不依赖于线程索引：
 
 ```cpp
-auto l1 = Layout<Shape<_2,_5>, Stride<_5,_1>>{};            // (_2,_5):(_5,_1)
-auto l2 = Layout<Shape<_3,_4>, Stride<_1,_3>>{};            // (_3,_4):(_1,_3)
-auto rake = raked_product(l1, l2);                          // ((_3,_2),(_4,_5)):((_10,_5),(_30,_1))
-auto rinv = right_inverse(rake);                            // (_5,_2,_3,_4):(_24,_3,_1,_6)
-auto res = rinv.with_shape(make_shape(size(l1), size(l2))); // ((_5,_2),(_3,_4)):((_24,_3),(_1,_6))
-
-// print_layout(rake);
-((_3,_2),(_4,_5)):((_10,_5),(_30,_1))
-        0     1     2     3     4     5     6     7     8     9    10    11    12    13    14    15    16    17    18    19
-    +-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+
- 0  |   0 |  30 |  60 |  90 |   1 |  31 |  61 |  91 |   2 |  32 |  62 |  92 |   3 |  33 |  63 |  93 |   4 |  34 |  64 |  94 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+
- 1  |  10 |  40 |  70 | 100 |  11 |  41 |  71 | 101 |  12 |  42 |  72 | 102 |  13 |  43 |  73 | 103 |  14 |  44 |  74 | 104 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+
- 2  |  20 |  50 |  80 | 110 |  21 |  51 |  81 | 111 |  22 |  52 |  82 | 112 |  23 |  53 |  83 | 113 |  24 |  54 |  84 | 114 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+
- 3  |   5 |  35 |  65 |  95 |   6 |  36 |  66 |  96 |   7 |  37 |  67 |  97 |   8 |  38 |  68 |  98 |   9 |  39 |  69 |  99 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+
- 4  |  15 |  45 |  75 | 105 |  16 |  46 |  76 | 106 |  17 |  47 |  77 | 107 |  18 |  48 |  78 | 108 |  19 |  49 |  79 | 109 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+
- 5  |  25 |  55 |  85 | 115 |  26 |  56 |  86 | 116 |  27 |  57 |  87 | 117 |  28 |  58 |  88 | 118 |  29 |  59 |  89 | 119 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+
-
-// print_layout(res);
-((_5,_2),(_3,_4)):((_24,_3),(_1,_6))
-        0     1     2     3     4     5     6     7     8     9    10    11
-    +-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+
- 0  |   0 |   1 |   2 |   6 |   7 |   8 |  12 |  13 |  14 |  18 |  19 |  20 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+
- 1  |  24 |  25 |  26 |  30 |  31 |  32 |  36 |  37 |  38 |  42 |  43 |  44 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+
- 2  |  48 |  49 |  50 |  54 |  55 |  56 |  60 |  61 |  62 |  66 |  67 |  68 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+
- 3  |  72 |  73 |  74 |  78 |  79 |  80 |  84 |  85 |  86 |  90 |  91 |  92 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+
- 4  |  96 |  97 |  98 | 102 | 103 | 104 | 108 | 109 | 110 | 114 | 115 | 116 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+
- 5  |   3 |   4 |   5 |   9 |  10 |  11 |  15 |  16 |  17 |  21 |  22 |  23 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+
- 6  |  27 |  28 |  29 |  33 |  34 |  35 |  39 |  40 |  41 |  45 |  46 |  47 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+
- 7  |  51 |  52 |  53 |  57 |  58 |  59 |  63 |  64 |  65 |  69 |  70 |  71 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+
- 8  |  75 |  76 |  77 |  81 |  82 |  83 |  87 |  88 |  89 |  93 |  94 |  95 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+
- 9  |  99 | 100 | 101 | 105 | 106 | 107 | 111 | 112 | 113 | 117 | 118 | 119 |
-    +-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+-----+
-```
-
-make_cotiled_copy
-
-make_tiled_copy_S
-
-make_tiled_copy_D
-
-tile_size
-
-size
-
-# TMA
-
-## TMA Traits Swizzle
-
-```cpp
-template <int B, int M, int S>
-CUTE_HOST_DEVICE constexpr
-TMA::SmemSwizzleBits
-get_tma_swizzle_bits(Swizzle<B,M,S>)
-{
-  if constexpr (M == 4) {
-    static_assert(0 <= B && B <= 3, "Expected B = 0,1,2, or 3 when M == 4. Unsupported layout swizzle.");
-    if constexpr (B == 3) { return TMA::SmemSwizzleBits::B128; }
-    if constexpr (B == 2) { return TMA::SmemSwizzleBits::B64; }
-    if constexpr (B == 1) { return TMA::SmemSwizzleBits::B32; }
-    if constexpr (B == 0) { return TMA::SmemSwizzleBits::DISABLE; }
-  } else
-
-  if constexpr (M == 5 || M == 6) {
-    static_assert(B == 2, "Expected B = 2 when M == 5 or 6. Unsupported layout swizzle.");
-    // S-condition as well?
-    return TMA::SmemSwizzleBits::B128;
-  } else
-
-  {
-    static_assert(M < 0, "Unsupported layout swizzle.");
-  }
-}
-
-template <class Layout>
-TMA::SmemSwizzleBits
-get_tma_swizzle_bits(Layout const& layout)
-{
-  return get_tma_swizzle_bits(get_swizzle_portion(layout));
-}
-
-template <int B, int M, int S>
-CUTE_HOST_DEVICE constexpr
-TMA::SmemSwizzleBase
-get_tma_swizzle_base(Swizzle<B,M,S>)
-{
-  if constexpr (M == 4) {
-    static_assert(0 <= B && B <= 3, "Expected B = 0,1,2, or 3 when M == 4. Unsupported layout swizzle.");
-    static_assert(S == 3, "Expected S = 3 when M == 4. Unsupported layout swizzle.");
-    return TMA::SmemSwizzleBase::SWIZZLE_BASE_16B;
-  } 
-  
-  else if constexpr (M == 5) {
-    static_assert(B == 2, "Expected B = 2 when M == 5. Unsupported layout swizzle.");
-    static_assert(S == 2, "Expected S = 2 when M == 5. Unsupported layout swizzle.");
-    return TMA::SmemSwizzleBase::SWIZZLE_BASE_32B;
-  } else if constexpr (M == 6) {
-    static_assert(B == 2, "Expected B = 2 when M == 5. Unsupported layout swizzle.");
-    return TMA::SmemSwizzleBase::SWIZZLE_BASE_64B;
-  } 
-  #if 1
-  else {
-    static_assert(4 <= M && M <= 6, "Expected 128b=16B=(2^4)B to 512b=64B=(2^6)B base swizzle.");
-  }
-  #else 
-  
-  else {
-    static_assert(M == 4, "Expected 128b=16B=(2^4)B base swizzle.");
-  }
-  #endif 
-}
-
-template <class Layout>
-TMA::SmemSwizzleBase
-get_tma_swizzle_base(Layout const& layout)
-{
-  return get_tma_swizzle_base(get_swizzle_portion(layout));
-}
-```
-
-## TMA Traits
-
-```cpp
-// The non-executable SM90_TMA_LOAD with tma_desc and no tma_mbar
-// Use .with(tma_mbar) to construct an executable version
-template <class NumBitsPerTMA, class AuxParams_>
-struct Copy_Traits<SM90_TMA_LOAD, NumBitsPerTMA, AuxParams_>
-{
-  using ThrID     = Layout<_1>;
-  // Map from (src-thr,src-val) to bit
-  using SrcLayout = Layout<Shape<_1,NumBitsPerTMA>>;
-  // Map from (dst-thr,dst-val) to bit
-  using DstLayout = Layout<Shape<_1,NumBitsPerTMA>>;
-  // Reference map from (thr,val) to bit
-  using RefLayout = SrcLayout;
-
-  // SM90_TMA_LOAD arguments
-  TmaDescriptor tma_desc_;
-  using AuxParams = AuxParams_;
-  AuxParams aux_params_;
-
-  // Return TmaDescriptor/TensorMap
-  CUTE_HOST_DEVICE constexpr
-  TmaDescriptor const*
-  get_tma_descriptor() const {
-    return &tma_desc_;
-  }
-
-  // Construct an executable SM90_TMA_LOAD with tma_mbar
-  CUTE_HOST_DEVICE constexpr
-  Copy_Traits<SM90_TMA_LOAD_OP, NumBitsPerTMA>
-  with(
-    uint64_t& tma_mbar,
-    [[maybe_unused]] uint16_t const& multicast_mask = 0,
-    TMA::CacheHintSm90 const& cache_hint = TMA::CacheHintSm90::EVICT_NORMAL) const {
-    // We accept multicast_mask here to keep the API for both atoms consistent
-    return {&tma_desc_, &tma_mbar, static_cast<uint64_t>(cache_hint)};
-  }
-
-  // Construct an executable SM90_TMA_LOAD with tma_mbar (temp. overloaded for grouped gemm/ptr array gemm)
-  CUTE_HOST_DEVICE constexpr
-  Copy_Traits<SM90_TMA_LOAD_OP, NumBitsPerTMA>
-  with(
-    TmaDescriptor const* new_tma_desc,
-    uint64_t& tma_mbar,
-    [[maybe_unused]] uint16_t const& multicast_mask = 0,
-    TMA::CacheHintSm90 const& cache_hint = TMA::CacheHintSm90::EVICT_NORMAL) const {
-    // We accept multicast_mask here to keep the API for both atoms consistent
-    return {new_tma_desc, &tma_mbar, static_cast<uint64_t>(cache_hint)};
-  }
-
-  // Generate the TMA coord tensor
-  template <class GShape>
-  CUTE_HOST_DEVICE constexpr
-  auto
-  get_tma_tensor(GShape const& g_shape) const {
-    static_assert(is_congruent<decltype(g_shape), decltype(aux_params_.g_stride_)>::value);
-    return make_coord_tensor(make_layout(g_shape, aux_params_.g_stride_));
-  }
-
-  // Don't try to execute a copy with SM90_TMA_LOAD before calling .with()
-  template <class TS, class SLayout,
-            class TD, class DLayout>
-  CUTE_HOST_DEVICE friend constexpr void
-  copy_unpack(Copy_Traits        const& traits,
-              Tensor<TS,SLayout> const& src,
-              Tensor<TD,DLayout>      & dst) = delete;
-};
-```
-
-### make_tma_copy_desc
-
-创建 tma 描述符。
-
-### make_tma_copy_atom
-
-创建一个 tma 类型的 copy atom。首先通过 make_tma_copy_desc 获取一个 tma 描述符，然后构建 traits 和 atom。
-
-```cpp
-template <class TmaInternalType,
-          class CopyOp,
-          class GEngine, class GLayout,
-          class SLayout,
-          class VShape, class VStride>
-CUTE_HOST_RTC
+template <class STensor>
+CUTE_HOST_DEVICE static
 auto
-make_tma_copy_atom(CopyOp,
-                   Tensor<GEngine,GLayout> const& gtensor,       // Full GMEM Tensor
-                   SLayout                 const& slayout,       // CTA Tile of SMEM, potentially swizzled
-                   uint32_t                const& num_multicast, // The number of CTAs involved in multicasting
-                   Layout<VShape,VStride>  const& cta_v_map)     // V: CTA val idx -> gmem mode
-{
-  //
-  // TMA truncated layout
-  //
+retile_S(STensor&& stensor) {
+  return make_tensor(static_cast<STensor&&>(stensor).data(),
+                     TiledCopy::retile(stensor.layout()));
+}
 
-  auto smem_swizzle = get_swizzle_portion(slayout);
-  auto smem_layout  = get_nonswizzle_portion(slayout);
-
-  auto tma_gbasis = detail::construct_tma_gbasis<TmaInternalType>(gtensor, smem_layout, cta_v_map);
-
-  //
-  // Construct the TMA Desc and the strides of the TMA Tensor
-  //
-
-  auto [tma_desc, aux_params] = detail::make_tma_copy_desc<TmaInternalType>(gtensor,
-                                                                            tma_gbasis,
-                                                                            smem_swizzle,
-                                                                            num_multicast);
-
-  //
-  // Construct the Copy_Traits
-  //
-
-  constexpr int num_bits_per_tma = size(tma_gbasis) * sizeof_bits_v<TmaInternalType>;
-  using Traits = Copy_Traits<CopyOp, cute::C<num_bits_per_tma>, decltype(aux_params)>;
-  using Atom   = Copy_Atom<Traits, typename GEngine::value_type>;
-
-  Traits tma_traits{tma_desc, aux_params};
-
-#if 0
-  print("num_bits_per_tma :  "); print(num_bits_per_tma); print("\n");
-  print("g_stride_bases   :  "); print(tma_traits.aux_params_.g_stride_); print("\n");
-#endif
-
-  // Return the Copy_Atom
-  return Atom{tma_traits};
+template <class DTensor>
+CUTE_HOST_DEVICE static
+auto
+retile_D(DTensor&& dtensor) {
+  return make_tensor(static_cast<DTensor&&>(dtensor).data(),
+                     TiledCopy::retile(dtensor.layout()));
 }
 ```
 
-### make_tma_copy_tiled
+**为什么 `retile_S` 和 `retile_D` 相同？** 注释说明：`retile_S` 和 `retile_D` 假设使用参考布局（RefLayout）工作，因此它们是相同的。因为 `RefLayout` 通常是 `SrcLayout` 或 `DstLayout` 之一，retile 基于 RefLayout 进行，对 Src 和 Dst 通用。
 
-用于创建一个 tma 类型的 tiledcopy。函数内部也是先调用的 make_tma_copy_atom，然后和 layout_TV 组合形成 tiledcopy。
 
-### make_tma_copy
+## 7. `make_tiled_copy` 相关函数
 
-用于创建 tma copy，入参主要有三个，第一个是 copy op，就是使用哪一种 tma 进行拷贝，默认是 cp.async.bulk.tensor。第二个是 gmem 的 tensor，第三个是 smem 的 layout，第四个是可选的 cluster size。
+### 7.1 `make_tiled_copy`：从线程和值布局构造
+
+最通用的工厂函数（见 `copy_atom.hpp:490-517`）：
 
 ```cpp
-// Explicit defaulting
-template <class CopyOp,
-          class GEngine, class GLayout,
-          class SLayout>
-CUTE_HOST_RTC
-auto
-make_tma_copy(CopyOp                  const& copy_op,
-              Tensor<GEngine,GLayout> const& gtensor,
-              SLayout                 const& slayout)
+/** 从逻辑线程和值布局构造 TiledCopy。
+ * 线程和值布局将坐标映射到 thr_idx 和 val_idx。
+ *   取这些布局的 raked_product 生成 TV 布局和 Tiler。
+ * 当线程和值需要非常特定的坐标映射时很有用。
+ */
+template <class... Args,
+          class ThrLayout,        // (m,n) -> thr_idx
+          class ValLayout = Layout<_1>>  // (m,n) -> val_idx
+CUTE_HOST_DEVICE
+auto constexpr
+make_tiled_copy(Copy_Atom<Args...> const& copy_atom,
+                ThrLayout          const& thr_layout = {},
+                ValLayout          const& val_layout = {})
 {
-  return make_tma_copy(copy_op, gtensor, slayout, product_each(shape(slayout)), Int<1>{});
-}
+  // 第1步：raked_product 生成 (M,N) -> (thr_idx, val_idx) 的布局
+  auto layout_mn = raked_product(thr_layout, val_layout);
 
-// Explicit defaulting
-template <class CopyOp,
-          class GEngine, class GLayout,
-          class SLayout,
-          class Cluster_Size>
-CUTE_HOST_RTC
-auto
-make_tma_copy(CopyOp                  const& copy_op,
-              Tensor<GEngine,GLayout> const& gtensor,
-              SLayout                 const& slayout,
-              Cluster_Size            const& cluster_size)
-{
-  return make_tma_copy(copy_op, gtensor, slayout, product_each(shape(slayout)), cluster_size);
+  // 第2步：逆布局，生成 (thr_idx, val_idx) -> (M,N) 的 TV 布局
+  auto layout_tv = right_inverse(layout_mn).with_shape(
+                       make_shape(size(thr_layout), size(val_layout)));
+
+  // 第3步：生成 Tiler（提取相关元素）
+  auto tiler = product_each(shape(layout_mn));
+
+  return make_tiled_copy_impl(copy_atom, layout_tv, tiler);
 }
 ```
 
-之后会调用 make_tma_copy_tiled。
+**参数解读**：
+- `thr_layout`：`(m, n) -> thr_idx`，描述哪个坐标由哪个线程负责
+- `val_layout`：`(m, n) -> val_idx`，描述哪个坐标对应哪个值
+- `raked_product`：将两个布局"梳状"组合，生成 `(m,n) -> (thr_idx, val_idx)`
 
-### make_tma_atom
-
-看着跟 make_tma_copy 类似，调用的是 make_tma_copy_atom 函数。
+**使用示例**：
 
 ```cpp
-template <class TmaInternalType = void,
-          class CopyOp,
-          class GEngine, class GLayout,
-          class SLayout,
-          class CTA_Tiler,
-          class Cluster_Size = Int<1>>
-CUTE_HOST_RTC
+// 32 个线程，每个线程拷贝 1 个值
+auto copy = make_tiled_copy(Copy_Atom<UniversalCopy<uint128_t>, half_t>{},
+                            Layout<Shape<_32>>{},       // 32 线程
+                            Layout<Shape<_1>>{});        // 每个线程 1 个值
+
+// 32 个线程，每个线程拷贝 4 个值
+auto copy = make_tiled_copy(Copy_Atom<UniversalCopy<uint32_t>, half_t>{},
+                            Layout<Shape<_32>>{},       // 32 线程
+                            Layout<Shape<_4>>{});        // 每个线程 4 个值
+```
+
+### 7.2 `make_cotiled_copy`：从数据布局构造
+
+当不关心线程/值到坐标的具体映射，而更关心向量化宽度和偏移时使用（见 `copy_atom.hpp:525-568`）：
+
+```cpp
+/** 从线程和值偏移映射构造 TiledCopy。
+ * TV 布局将线程和值映射到 data_layout 的余域。
+ * 当线程和值不关心拥有特定坐标，而更关心向量化宽度和偏移时有用。
+ */
+template <class... Args, class AtomTVLayout, class DataLayout>
+CUTE_HOST_DEVICE constexpr
 auto
-make_tma_atom(CopyOp                  const& copy_op,
-              Tensor<GEngine,GLayout> const& gtensor,
-              SLayout                 const& slayout,
-              CTA_Tiler               const& cta_tiler,
-              Cluster_Size            const& cluster_size = {})
+make_cotiled_copy(Copy_Atom<Args...> const& copy_atom,
+                  AtomTVLayout const& atom_tv_layout,   // atom (thr,val) -> data addr
+                  DataLayout   const& data_layout)      // coord -> data addr
 {
-  auto cta_v_tile = make_identity_layout(shape(gtensor)).compose(cta_tiler);
-  // Prefer TmaInternalType if specified. Fallback to GEngine::value_type
-  using TmaType = conditional_t<is_same<void, TmaInternalType>::value, typename GEngine::value_type, TmaInternalType>;
-  return detail::make_tma_copy_atom<TmaType>(copy_op,
-                                             gtensor, slayout,
-                                             size(cluster_size), cta_v_tile);
+  static_assert(is_static<AtomTVLayout>::value);
+  static_assert(is_static<DataLayout>::value);
+
+  // data addr -> data coord（逆布局，附加 1:0 处理越界）
+  auto inv_data_layout = make_layout(left_inverse(data_layout), Layout<_1,_0>{});
+
+  // (tid,vid) -> data_coord
+  auto layout_tv_data = composition(inv_data_layout, atom_tv_layout);
+
+  // 验证有效性：AtomTVLayout 指向的内存确实存在于 DataLayout 中
+  CUTE_STATIC_ASSERT_V(
+      coalesce(composition(make_layout(data_layout, Layout<_1,_0>{}), layout<1>(layout_tv_data)))
+      == coalesce(layout<1>(atom_tv_layout)),
+      "The memory pointed to by AtomTVLayout does not exist in the DataLayout.");
+
+  // 生成 Tiler 和 Layout_TV ...
+  // （省略具体计算，与 make_tiled_copy 类似但基于数据布局）
 }
 ```
 
-### tma_partition
+### 7.3 `make_tiled_copy_S` / `make_tiled_copy_D`：匹配已有 TiledCopy
 
-类似于普通 tiledcopy 的 partition 函数，不过 tma 把 partitionS 和 partitionD 合成一个了，返回 gtensor 和 stensor。
+```cpp
+// 构造一个 Src 布局匹配 tiled_copy 的 TiledCopy
+template <class... Args, class TiledCopy>
+CUTE_HOST_DEVICE
+auto
+make_tiled_copy_S(Copy_Atom<Args...> const& copy_atom,
+                  TiledCopy          const& tiled_copy)
+{
+  return make_tiled_copy_impl(copy_atom,
+                              tiled_copy.get_layoutS_TV(),
+                              typename TiledCopy::Tiler_MN{});
+}
 
-### make_tma_copy_A_sm90
+// 构造一个 Dst 布局匹配 tiled_copy 的 TiledCopy
+template <class... Args, class TiledCopy>
+CUTE_HOST_DEVICE
+auto
+make_tiled_copy_D(Copy_Atom<Args...> const& copy_atom,
+                  TiledCopy          const& tiled_copy)
+{
+  return make_tiled_copy_impl(copy_atom,
+                              tiled_copy.get_layoutD_TV(),
+                              typename TiledCopy::Tiler_MN{});
+}
+```
 
-### make_tma_copy_B_sm90
+**用途**：当需要用不同的 Copy_Atom 在同一个数据流上操作时（如先 `cp.async` 加载到 smem，再用 `ldmatrix` 从 smem 加载到寄存器），这两个函数确保新的 TiledCopy 与已有的 TiledCopy 在 Src 或 Dst 布局上对齐。
 
-### make_tma_copy_C_sm90
+## 8. `make_tiled_copy_A/B/C`
 
-这三个与 make_tma_copy 函数相同，区别是 cta_tiler 是根据矩阵乘的 MNK 确定的。
+CuTe 最强大的设计之一是 Copy 与 MMA 的无缝协作。这三个工厂函数（见 `copy_atom.hpp:421-446`）直接从 TiledMMA 构造 TiledCopy：
 
+```cpp
+// 构造匹配 MMA 的 A 矩阵布局的 TiledCopy
+template <class... CArgs, class... MArgs>
+CUTE_HOST_DEVICE
+auto constexpr
+make_tiled_copy_A(Copy_Atom<CArgs...> const& copy_atom,
+                  TiledMMA<MArgs...>  const& mma)
+{
+  return make_tiled_copy_impl(copy_atom,
+                              mma.get_layoutA_TV(),    // MMA 的 A 布局
+                              make_shape(tile_size<0>(mma), tile_size<2>(mma)));  // (M,K)
+}
+
+// 构造匹配 MMA 的 B 矩阵布局的 TiledCopy
+template <class... CArgs, class... MArgs>
+CUTE_HOST_DEVICE
+auto constexpr
+make_tiled_copy_B(Copy_Atom<CArgs...> const& copy_atom,
+                  TiledMMA<MArgs...>  const& mma)
+{
+  return make_tiled_copy_impl(copy_atom,
+                              mma.get_layoutB_TV(),    // MMA 的 B 布局
+                              make_shape(tile_size<1>(mma), tile_size<2>(mma)));  // (N,K)
+}
+
+// 构造匹配 MMA 的 C 矩阵布局的 TiledCopy
+template <class... CArgs, class... MArgs>
+CUTE_HOST_DEVICE
+auto
+make_tiled_copy_C(Copy_Atom<CArgs...> const& copy_atom,
+                  TiledMMA<MArgs...>  const& mma)
+{
+  return make_tiled_copy_impl(copy_atom,
+                              mma.get_layoutC_TV(),    // MMA 的 C 布局
+                              make_shape(tile_size<0>(mma), tile_size<1>(mma)));  // (M,N)
+}
+```
+
+**设计意图**：
+- `make_tiled_copy_A`：构造一个 TiledCopy，使得拷贝后数据的线程-值分布**正好匹配** MMA 对 A 矩阵的分布要求
+- `make_tiled_copy_B`：同理，匹配 B 矩阵
+- `make_tiled_copy_C`：匹配 C 矩阵（用于 epilogue，将累加器存回）
+
+**这意味着**：用 `make_tiled_copy_A` 构造的 TiledCopy 分区得到的寄存器片段，可以直接传给 MMA 的 `call()` 函数，无需额外重排。这是 CuTe 实现高效 GEMM 的关键——Copy 和 MMA 通过布局系统自动对齐。
+
+### 8.1 `make_tiled_copy_C_atom`：原子级 C 拷贝
+
+一个更精细的变体（见 `copy_atom.hpp:450-482`）：
+
+```cpp
+// 返回能 retile LayoutC_TV 的最小 tiled copy
+// 用于流水线 epilogue 的子分块存储
+template <class... CArgs, class... MArgs>
+CUTE_HOST_DEVICE
+auto
+make_tiled_copy_C_atom(Copy_Atom<CArgs...> const& copy_atom,
+                       TiledMMA<MArgs...>  const& mma)
+{
+  // 截断 V-layout 到 Copy_Atom 大小，保留 V-order
+  auto layoutC_TV = mma.get_layoutC_TV();
+  auto copy_V     = Int<Copy_Atom<CArgs...>::NumValSrc>{};
+  CUTE_STATIC_ASSERT_V(copy_V <= size<1>(layoutC_TV));
+  auto layout_TV  = composition(layoutC_TV, make_layout(make_shape(size<0>(layoutC_TV), copy_V)));
+
+  // 重新计算 Tiler 和 TV 布局 ...
+  // （省略具体计算）
+
+  return make_tiled_copy_impl(copy_atom, layout_tv, tiler);
+}
+```
+
+**用途**：当 epilogue 需要将 C 矩阵的子分块存回时，这个函数构造一个最小的 TiledCopy，其 V 布局与 Copy_Atom 大小匹配，但保持 MMA 的 C 布局顺序。
+
+## 9. 完整使用示例
+
+### 9.1 Ampere 架构：cp.async + ldmatrix + mma 的完整流程
+
+```cpp
+#include <cute/atom/copy_atom.hpp>
+#include <cute/atom/mma_atom.hpp>
+using namespace cute;
+
+// ===== 第1步：定义 TiledMMA =====
+auto mma = make_tiled_mma(SM80_16x8x16_F32F16F16F32_TN{},
+                          Layout<Shape<_2, _4>>{});  // M×2, N×4
+
+// ===== 第2步：定义 Copy Atoms =====
+// gmem -> smem: cp.async (16字节 = 8个half)
+using CopyAtomG2S = Copy_Atom<SM80_CP_ASYNC_CACHEGLOBAL<uint128_t>, half_t>;
+// smem -> rmem: ldmatrix (匹配 MMA 的 A/B 布局)
+using CopyAtomS2R_A = Copy_Atom<SM75_U32x4_LDSM_N, half_t>;
+using CopyAtomS2R_B = Copy_Atom<SM75_U32x2_LDSM_N, half_t>;
+
+// ===== 第3步：构造 TiledCopy =====
+// gmem -> smem: 自定义线程分布
+auto copy_g2s = make_tiled_copy(CopyAtomG2S{},
+                                Layout<Shape<_128>>{},   // 128 线程
+                                Layout<Shape<_1>>{});    // 每线程 1 个 128-bit
+
+// smem -> rmem: 匹配 MMA 的 A/B 布局
+auto copy_s2r_A = make_tiled_copy_A(CopyAtomS2R_A{}, mma);
+auto copy_s2r_B = make_tiled_copy_B(CopyAtomS2R_B{}, mma);
+
+// ===== 第4步：获取线程切片 =====
+int thread_idx = threadIdx.x;
+auto thr_copy_g2s = copy_g2s.get_slice(thread_idx);
+auto thr_copy_s2r_A = copy_s2r_A.get_slice(thread_idx);
+auto thr_copy_s2r_B = copy_s2r_B.get_slice(thread_idx);
+auto thr_mma = mma.get_slice(thread_idx);
+
+// ===== 第5步：分区 =====
+// 假设 gA: (M, K) gmem 张量, gB: (N, K) gmem 张量
+// sA: (M, K) smem 张量, sB: (N, K) smem 张量
+
+// gmem -> smem 分区
+auto tAgA = thr_copy_g2s.partition_S(gA);  // (FrgV, RestM, RestK)
+auto tAsA = thr_copy_g2s.partition_D(sA);  // (FrgV, RestM, RestK)
+auto tBgB = thr_copy_g2s.partition_S(gB);
+auto tBsB = thr_copy_g2s.partition_D(sB);
+
+// smem -> rmem 分区（匹配 MMA）
+auto tArA = thr_copy_s2r_A.partition_S(sA);  // (FrgV, RestM, RestK)
+auto tBrB = thr_copy_s2r_B.partition_S(sB);  // (FrgV, RestN, RestK)
+
+// MMA 分区
+auto tCrC = thr_mma.partition_fragment_C(sC); // (FrgV, RestM, RestN)
+
+// ===== 第6步：执行拷贝和计算 =====
+// gmem -> smem (异步)
+copy(copy_g2s, tAgA, tAsA);
+copy(copy_g2s, tBgB, tBsB);
+cp_async_fence();              // 提交
+cp_async_wait<0>();            // 等待完成
+__syncthreads();
+
+// smem -> rmem
+copy(copy_s2r_A, tArA, tCrA);  // tCrA: 寄存器片段
+copy(copy_s2r_B, tBrB, tCrB);
+
+// rmem: MMA 计算
+mma.call(tCrA, tCrB, tCrC);    // C = A * B + C
+```
+
+### 9.2 Hopper 架构：TMA + WGMMA 的完整流程
+
+```cpp
+#include <cute/atom/copy_atom.hpp>
+#include <cute/atom/copy_traits_sm90_tma.hpp>
+#include <cute/atom/mma_atom.hpp>
+using namespace cute;
+
+// ===== 第1步：创建 TMA 描述符（host 端）=====
+// 假设有函数创建 TMA 描述符
+auto tma_desc_A = make_tma_descriptor(gA_layout, ...);
+auto tma_desc_B = make_tma_descriptor(gB_layout, ...);
+
+// ===== 第2步：创建 TMA Copy_Atom =====
+// TMA_LOAD: gmem -> smem
+// 需要指定每次 TMA 的比特数（如 1024 = 128 字节）
+auto copy_atom_A = Copy_Atom<SM90_TMA_LOAD, half_t>{};
+auto copy_atom_B = Copy_Atom<SM90_TMA_LOAD, half_t>{};
+
+// ===== 第3步：构造 TiledCopy =====
+// TMA 是单线程发起，通常用 Layout<Shape<_1>> 表示 1 个线程
+auto copy_g2s = make_tiled_copy(copy_atom_A,
+                                Layout<Shape<_1>>{},   // 1 个线程发起 TMA
+                                Layout<Shape<_1>>{});
+
+// ===== 第4步：绑定 TMA 描述符和 mbarrier =====
+// 需要先构造 Traits，再 with(mbar)
+// 注意：TMA 的 with() 返回可执行的 Traits
+auto tma_traits_A = Copy_Traits<SM90_TMA_LOAD, ...>{tma_desc_A, ...};
+uint64_t mbar;
+auto executable_traits_A = tma_traits_A.with(mbar);
+auto copy_atom_exec_A = Copy_Atom<decltype(executable_traits_A), half_t>{executable_traits_A};
+
+// ===== 第5步：获取 TMA 坐标张量 =====
+// TMA 不直接用数据指针分区，而是用坐标张量
+auto gA_tma = tma_traits_A.get_tma_tensor(make_shape(M, K));  // 坐标张量
+
+// 分区坐标
+auto thr_copy = copy_g2s.get_slice(threadIdx.x);
+auto tAgA = thr_copy.partition_S(gA_tma);  // TMA 坐标片段
+auto tAsA = thr_copy.partition_D(sA);       // smem 目标
+
+// ===== 第6步：执行 TMA 拷贝 =====
+// 发起 TMA（需要先设置 mbarrier）
+copy(copy_g2s, tAgA, tAsA);
+// 等待 mbarrier...
+```
+
+### 9.3 ZFILL 条件拷贝示例
+
+```cpp
+// 创建带 ZFILL 的 cp.async Copy_Atom
+auto copy_atom = Copy_Atom<SM80_CP_ASYNC_CACHEALWAYS_ZFILL<uint128_t>, half_t>{};
+
+// 构造 TiledCopy
+auto copy = make_tiled_copy(copy_atom,
+                            Layout<Shape<_128>>{},
+                            Layout<Shape<_1>>{});
+
+auto thr_copy = copy.get_slice(threadIdx.x);
+auto tAgA = thr_copy.partition_S(gA);
+auto tAsA = thr_copy.partition_D(sA);
+
+// 构造谓词张量（处理边界）
+auto pred = make_tensor<bool>(shape(tAgA));
+// ... 填充 pred，越界处为 false ...
+
+// 带谓词的拷贝：pred=true 正常拷贝，pred=false 零填充
+copy.call(pred, tAgA, tAsA);
+// 内部会调用 traits.with(pred[0]) 构造 ZFILL Traits
+// 然后调用 cp.async.ca.shared.global [%0], [%1], 16, src_size;
+//   当 pred=false 时 src_size=0，硬件零填充
+```
+
+### 9.4 Epilogue：retile + C 拷贝
+
+```cpp
+// 假设 MMA 计算完成，tCrC 是累加器寄存器片段
+// 现在需要将结果存回 gmem
+
+// 第1步：构造 C 的 TiledCopy
+auto copy_atom_C = Copy_Atom<UniversalCopy<uint128_t>, float>{};
+auto copy_C = make_tiled_copy_C(copy_atom_C, mma);
+
+// 第2步：分区 gmem 目标
+auto thr_copy_C = copy_C.get_slice(threadIdx.x);
+auto tCgC = thr_copy_C.partition_D(gC);  // gmem 目标片段
+
+// 第3步：retile 寄存器片段以匹配 Copy_Atom
+auto tCrC_retiled = ThrCopy<TiledCopy, int>::retile_D(tCrC);
+// 或通过 ThrCopy 实例：
+// auto tCrC_retiled = thr_copy_C.retile_D(tCrC);
+
+// 第4步：拷贝 rmem -> gmem
+copy(copy_C, tCrC_retiled, tCgC);
+```
+
+## 10. 总结
+
+### 10.1 Copy 与 MMA 抽象的对比
+
+| 特性 | MMA | Copy |
+|:------:|:-----:|:------:|
+| **底层 Operation** | `fma()` 函数 | `copy()` 函数 |
+| **寄存器类型** | D/A/B/C Registers | S/D Registers |
+| **Traits 布局单位** | 坐标 (m,n,k) | 比特 (bit) |
+| **Traits 布局数量** | ALayout, BLayout, CLayout | SrcLayout, DstLayout, RefLayout |
+| **Atom 参数化** | 无（从 Traits 推导） | **ValType**（用户指定） |
+| **Tiled 平铺方式** | `AtomLayoutMNK` 自动计算 | **直接提供** `LayoutCopy_TV` + `Tiler_MN` |
+| **与 MMA 对接** | - | `make_tiled_copy_A/B/C` |
+| **运行时参数** | `accumulate_` (Scale) | `pred` (ZFILL), `tma_mbar` (TMA) |
+
+### 10.2 RefLayout 的设计意义
+
+Copy 引入 `RefLayout` 是为了处理 **Src 和 Dst 有不同线程-值分布**的情况。典型场景是 `ldmatrix`：
+
+- **Src（共享内存）**：32 个线程按 `(8, 4)` 网格排列，每个线程提供一个 128-bit 地址
+- **Dst（寄存器）**：32 个线程线性排列，每个线程获得 32-bit 数据
+
+`RefLayout` 提供了一个统一的"参考坐标系"：TiledCopy 内部用 RefLayout 坐标管理线程-值映射，在执行时通过 `right_inverse(RefLayout).compose(SrcLayout)` 或 `.compose(DstLayout)` 映射到实际的 Src 或 Dst 表示。这种设计使得同一个 TiledCopy 可以正确处理 Src 和 Dst 分布不同的 Copy 指令。
+
+### 10.3 位级布局的统一性
+
+Copy Traits 使用**比特**作为布局单位，这是一个关键的设计决策：
+
+```
+Copy_Traits:
+  SrcLayout: (thr, val) -> bit    (位级)
+  DstLayout: (thr, val) -> bit    (位级)
+  
+Copy_Atom:
+  ValLayoutSrc = recast_layout<uint1_t, ValType>(SrcLayout)   (值级)
+  ValLayoutDst = recast_layout<uint1_t, ValType>(DstLayout)   (值级)
+```
+
+**好处**：
+1. **类型无关**：同一种 Copy 指令（如 `cp.async` 16 字节）可以用于 `half_t`（8 个值）、`float`（4 个值）、`uint8_t`（16 个值），只需改变 `ValType`
+2. **精确描述**：位级布局可以精确描述子字节类型（如 4-bit `int4b_t`、1-bit `uint1b_t`）的拷贝
+3. **自动转换**：`recast_layout` 自动处理位到值的转换，用户只需指定 `ValType`
+
+### 10.4 从 Ampere 到 Hopper 的演进
+
+| 特性 | Ampere (SM80) | Hopper (SM90) |
+|:------:|:--------------:|:--------------:|
+| gmem→smem 拷贝 | `cp.async`（每线程 4/8/16 字节） | **TMA**（单线程发起，批量拷贝） |
+| smem→rmem 拷贝 | `ldmatrix`（warp 协作） | WGMMA 直接从 smem 读取（无需 `ldmatrix`） |
+| 线程数 | `ThrID = Layout<_32>` (warp) | `ThrID = Layout<_1>` (TMA) 或 `_128` (WGMMA) |
+| 布局复杂度 | 复杂（warp 级线程分布） | 简单（TMA: 单线程；WGMMA: warpgroup） |
+| 运行时参数 | `pred` (ZFILL) | `tma_mbar`, `multicast_mask`, `cache_hint` |
+| 异步同步 | `cp.async.commit_group` + `wait_group` | **mbarrier** (内存屏障) |
+| 边界处理 | 软件 predication（ZFILL） | **硬件自动**（TMA 描述符内含边界信息） |
+| `with()` 用途 | 设置 ZFILL 谓词 | 绑定 mbarrier、cache_hint |
+
+**TMA 带来的变革**：
+1. **简化线程分布**：TMA 只需一个线程发起，`ThrID = Layout<_1>`，大大简化了 Traits
+2. **描述符驱动**：地址计算、边界检查、swizzle 全部由硬件处理，软件只需提供坐标
+3. **坐标张量**：TMA 引入了 `get_tma_tensor()` 和坐标张量的概念，分区操作的对象从数据指针变为坐标
+4. **mbarrier 同步**：取代了 `cp.async` 的 `commit_group`/`wait_group`，与线程块集群（cluster）和 DSMEM（分布式共享内存）深度集成
+
+### 10.5 关键文件索引
+
+| 文件 | 内容 |
+|:------:|:------:|
+| `include/cute/arch/copy.hpp` | `UniversalCopy`, `AutoVectorizingCopy`, `DefaultCopy` |
+| `include/cute/arch/copy_sm75.hpp` | `ldmatrix` PTX 封装（Turing） |
+| `include/cute/arch/copy_sm80.hpp` | `cp.async` PTX 封装（Ampere） |
+| `include/cute/arch/copy_sm90.hpp` | `stmatrix` PTX 封装（Hopper） |
+| `include/cute/arch/copy_sm90_tma.hpp` | TMA `cp.async.bulk.tensor` PTX 封装 |
+| `include/cute/atom/copy_traits.hpp` | `Copy_Traits` 概念 + `copy_unpack` |
+| `include/cute/atom/copy_traits_sm50.hpp` | Shuffle 指令的 Traits |
+| `include/cute/atom/copy_traits_sm75.hpp` | `ldmatrix` 的 Traits |
+| `include/cute/atom/copy_traits_sm80.hpp` | `cp.async` 的 Traits（含 ZFILL） |
+| `include/cute/atom/copy_traits_sm90.hpp` | `stmatrix` 的 Traits |
+| `include/cute/atom/copy_traits_sm90_tma.hpp` | TMA / Bulk Copy 的 Traits |
+| `include/cute/atom/copy_atom.hpp` | `Copy_Atom`, `TiledCopy`, `ThrCopy`, 工厂函数 |
+
+---
+
+> **参考资料**：
+> - CUTLASS 4.5.0 源码：`include/cute/atom/` 和 `include/cute/arch/` 目录
+> - NVIDIA PTX ISA 文档：`cp.async`, `ldmatrix`, `stmatrix`, `cp.async.bulk.tensor` 指令说明
+> - CuTe Layout 系统：`include/cute/layout.hpp`
+>
+> 本文所有代码引用均基于 CUTLASS 4.5.0，行号可能与实际文件略有出入，请以源码为准。
