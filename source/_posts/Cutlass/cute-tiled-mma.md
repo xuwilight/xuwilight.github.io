@@ -337,7 +337,7 @@ using SM80_16x8_Row = Layout<Shape <Shape < _4, _8>, Shape < _2, _2>>,
 通过这种方式，再结合 cute 代数运算，当进行 SM80_16x8_Row[tid] 索引时就能得到 tid 线程对应的元素的物理索引了。
 
 
-### 3.2 SM90 GMMA Traits 的特殊性
+### 3.2 SM90 GMMA Traits
 
 Hopper 的 WGMMA Traits（见 `include/cute/atom/mma_traits_sm90_gmma.hpp`）引入了新的模式：
 
@@ -465,7 +465,7 @@ MMA_Op::fma(rD[0], rD[1], ...,    // D 寄存器
 
 ### 4.1 MMA_Atom 的定义
 
-`MMA_Atom`（见 `mma_atom.hpp:41-196`）是 Traits 的直接子类，添加了**调用接口**和**片段构造**功能：
+`MMA_Atom`（见 `mma_atom.hpp:41-196`）是 Traits 的直接子类，添加了调用接口和片段构造功能：
 
 ```cpp
 template <class MMAOperation>
@@ -533,11 +533,11 @@ call(Tensor<TA, ALayout> const& A,
 }
 ```
 
-**为什么要求 rank-1 张量？** 因为 `mma_unpack` 需要将张量 `recast` 为寄存器数组，这要求张量是一维的（展平的寄存器序列）。调用者需要确保 A、B、C 已经按照正确的布局组织成一维张量。
+为什么要求 rank-1 张量？因为 `mma_unpack` 需要将张量 `recast` 为寄存器数组，这要求张量是一维的（展平的寄存器序列）。调用者需要确保 A、B、C 已经按照正确的布局组织成一维张量。
 
 ### 4.3 片段构造：`make_fragment_A/B/C`
 
-这三个静态函数（见 `mma_atom.hpp:129-195`）用于从**已分区的张量**构造 MMA 需要的片段：
+这三个静态函数（见 `mma_atom.hpp:129-195`）用于从已分区的张量构造 MMA 需要的片段：
 
 ```cpp
 // make_fragment_C：构造累加器片段
@@ -574,7 +574,7 @@ make_fragment_A(ATensor&& atensor)
 }
 ```
 
-**`FrgType` vs `ValType` 的关键区别**：
+`FrgType` vs `ValType` 的区别：
 - `ValTypeA` = `half_t`：矩阵 A 的逻辑元素类型
 - `FrgTypeA` = `GMMA::smem_desc<K>`：MMA 实际消费的片段类型
 
@@ -619,7 +619,7 @@ struct TiledMMA : MMA_Atom
 };
 ```
 
-**`ThrLayoutVMNK` 的含义**：
+`ThrLayoutVMNK` 的含义：
 
 `tiled_product(AtomThrID{}, AtomLayoutMNK{})` 将原子内部的线程布局（如 32 线程）与原子间的平铺布局（如 2×2 = 4 个原子）组合，生成一个 4 维布局 `(ThrV, ThrM, ThrN, ThrK) -> thread_idx`：
 - **ThrV**：原子内部的线程编号（0\~31 对于 warp MMA，0\~127 对于 warpgroup MMA）
@@ -627,13 +627,55 @@ struct TiledMMA : MMA_Atom
 - **ThrN**：N 方向上平铺的原子索引
 - **ThrK**：K 方向上平铺的原子索引
 
-**例如**：`TiledMMA<MMA_Atom<SM80_16x8x16_F32F16F16F32_TN>, Layout<Shape<2,2,1>>>` 表示：
+例如：`TiledMMA<MMA_Atom<SM80_16x8x16_F32F16F16F32_TN>, Layout<Shape<2,2,1>>>` 表示：
 - 原子形状 16×8×16，有 32 个线程
 - 在 M 方向平铺 2 个原子，N 方向平铺 2 个原子，K 方向不平铺
 - 总形状：M=16×2=32, N=8×2=16, K=16
 - 总线程数：32 × 2 × 2 × 1 = 128（即 4 个 warp）
 
-### 5.2 `thrfrg_C`：将 C 张量分区为线程-片段视图
+下图是 `SM80_16x8x16_F32F16F16F32_TN` 的 Atom 布局。可以看到跟前面 Traits 里介绍的基本相同，左边是矩阵 A，上面是矩阵 B，右下是矩阵 C。
+
+![tiledmma_m16n8k16_atom](/assets/cute-tiled-mma/atommma.png "tiledmma")
+
+下面是将 Atom 按照 `Layout<Shape<2,2,1>>` 的布局进行平铺。可以看到 Atom 在 M 和 N 方向上都复制了两份，线程总数变成了128个，但是每个线程处理的元素还是和 Atom 相同。
+
+![tiledmma_m16n8k16_tiled](/assets/cute-tiled-mma/tiledmma.png "tiledmma")
+
+
+### 5.2 `permutation_mnk`
+
+AtomLayoutMNK 这个参数是在 MNK 方向上对线程数量进行拓展，但是每个线程负责的元素没有变。
+
+PermutationMNK 这个参数则可以把一个线程负责的数据在 MNK 方向上进行拓展，并且根据设置的 Layout 进行变换。详见：[Permutations 参数的作用](/2025/03/24/Cutlass/cute-Permutations/)。
+
+```cpp
+template <int I>
+CUTE_HOST_DEVICE constexpr
+auto
+permutation_mnk() const {
+  static_assert(0 <= I && I < 3);
+  auto perm = get<I>(PermutationMNK{});
+  // 如果用户指定了 Underscore（未置换），则返回原子大小 × 平铺大小
+  return conditional_return(is_underscore<decltype(perm)>{},
+                            size<I>(AtomShape_MNK{}) * size<I+1>(get_thr_layout_vmnk()),
+                            perm);
+}
+```
+
+作用：返回第 I 个模式（M/N/K）的置换布局。如果用户未指定（使用 `_`），则返回默认的连续布局（大小 = 原子大小 × 平铺大小）。
+
+为什么需要置换？某些 GEMM 布局要求在平铺前对 M/N/K 模式进行重排。比如说可以按照线程连续的布局进行计算，也可以按照元素连续的布局进行计算。
+
+下图是 `SM80_16x8x16_F32F16F16F32_TN` Atom 在 PermutationMNK = <32, 16, 16> 的情况下的布局。因为 Atom 的 MNK 大小是 16×8×16，所以等于在 M 和 N 方向上都扩大 2 倍，K 方向上不变。
+
+从下面的图中也可以看到，线程数还是 32，但是一个线程需要负责 16 个元素了。
+
+![tiledmma_m16n8k16_tiled](/assets/cute-tiled-mma/tiledmma_v.png "tiledmma")
+
+
+### 5.3 `thrfrg_C`
+
+thrfrg_C 用于将 C 张量分区为线程-片段视图。
 
 `thrfrg_C`（见 `mma_atom.hpp:249-275`）是 TiledMMA 最核心的函数之一。它将一个 `(M, N)` 的张量转换为 `((ThrV, (ThrM, ThrN)), (FrgV, (RestM, RestN)))` 的线程-片段视图：
 
@@ -675,7 +717,7 @@ thrfrg_C(CTensor&& ctensor) const
 }
 ```
 
-**四步流程图解**：
+四步流程图解：
 
 ```
 输入: ctensor 的 layout (M, N)
@@ -693,7 +735,7 @@ thrfrg_C(CTensor&& ctensor) const
 ((ThrV, (ThrM, ThrN)), (FrgV, (RestM, RestN)))  -- 原子间: 按线程平铺切分
 ```
 
-**最终含义**：
+最终含义：
 - `ThrV`：原子内的线程编号
 - `(ThrM, ThrN)`：原子在 M、N 方向的平铺索引
 - `FrgV`：原子内每个线程持有的值编号
@@ -701,27 +743,11 @@ thrfrg_C(CTensor&& ctensor) const
 
 `thrfrg_A` 和 `thrfrg_B` 的逻辑完全类似，只是操作的模式从 (M,N) 变为 (M,K) 和 (N,K)，且线程平铺使用 `(ThrM, ThrK)` 和 `(ThrN, ThrK)`。
 
-### 5.3 `permutation_mnk`：MNK 模式置换
 
-```cpp
-template <int I>
-CUTE_HOST_DEVICE constexpr
-auto
-permutation_mnk() const {
-  static_assert(0 <= I && I < 3);
-  auto perm = get<I>(PermutationMNK{});
-  // 如果用户指定了 Underscore（未置换），则返回原子大小 × 平铺大小
-  return conditional_return(is_underscore<decltype(perm)>{},
-                            size<I>(AtomShape_MNK{}) * size<I+1>(get_thr_layout_vmnk()),
-                            perm);
-}
-```
 
-**作用**：返回第 I 个模式（M/N/K）的置换布局。如果用户未指定（使用 `_`），则返回默认的连续布局（大小 = 原子大小 × 平铺大小）。
+### 5.4 `get_layoutC_TV`：
 
-**为什么需要置换？** 某些 GEMM 布局要求在平铺前对 M/N/K 模式进行重排。例如，对于某些 K-major 的输入，可能需要先对 K 模式进行置换，使得原子 MMA 能正确对齐数据。
-
-### 5.4 `get_layoutC_TV`：获取 (thread_idx, val_idx) → (M,N) 的布局
+get_layoutC_TV 用于获取 (thread_idx, val_idx) → (M,N) 的布局。
 
 ```cpp
 CUTE_HOST_DEVICE constexpr
@@ -744,11 +770,13 @@ get_layoutC_TV() const
 }
 ```
 
-**用途**：返回一个布局 `L`，使得 `L(thread_idx, val_idx)` 给出该线程该值对应的 (M, N) 坐标。这对于理解线程-数据映射关系、生成 LaTeX/SVG 可视化非常有用。
+用途：返回一个布局 `L`，使得 `L(thread_idx, val_idx)` 给出该线程该值对应的 (M, N) 坐标。这对于理解线程-数据映射关系、生成 LaTeX/SVG 可视化非常有用。
 
 `get_layoutA_TV` 和 `get_layoutB_TV` 类似，但额外需要处理 `(ThrV, (ThrM, ThrK))` 到 `(ThrV, (ThrM, ThrN, ThrK))` 的维度扩展（因为 A 的线程布局只涉及 M 和 K，但总线程布局包含 N）。
 
-### 5.5 `get_slice` / `get_thread_slice`：获取单个线程的视角
+### 5.5 `get_slice` / `get_thread_slice`
+
+这两个函数用于获取单个线程的视角，也就是下面提到的 ThrMMA。
 
 ```cpp
 template <class ThrIdx>
@@ -815,7 +843,7 @@ partition_C(CTensor&& ctensor) const
 }
 ```
 
-**结果**：返回一个 `(FrgV, (RestM, RestN))` 的张量，包含本线程负责的所有 C 元素。其中：
+结果：返回一个 `(FrgV, (RestM, RestN))` 的张量，包含本线程负责的所有 C 元素。其中：
 - `FrgV`：原子内本线程持有的值
 - `(RestM, RestN)`：本线程在 M、N 方向平铺的剩余部分
 
@@ -886,9 +914,9 @@ partition_fragment_B(BTensor&& btensor) const
 }
 ```
 
-**`partition_C` vs `partition_fragment_C` 的区别**：
-- `partition_C`：返回一个**视图**张量，共享输入张量的数据指针（`ctensor.data()`）
-- `partition_fragment_C`：返回一个**新片段**张量，具有 `FrgTypeC` 类型和分区后的形状
+`partition_C` vs `partition_fragment_C` 的区别：
+- `partition_C`：返回一个视图张量，共享输入张量的数据指针（`ctensor.data()`）
+- `partition_fragment_C`：返回一个新片段张量，具有 `FrgTypeC` 类型和分区后的形状
 
 对于 C（累加器）：`partition_fragment_C` 返回 `make_tensor<FrgTypeC>(shape(partition_C(ctensor)))`，即一个全新的寄存器张量。
 
@@ -940,7 +968,7 @@ make_tiled_mma(MMA_Op       const&,
 }
 ```
 
-**使用方式**：
+使用方式：
 
 ```cpp
 // 基本用法：单原子，不平铺
@@ -960,7 +988,7 @@ auto mma = make_tiled_mma(SM80_16x8x16_F32F16F16F32_TN{},
 
 ### 7.2 `partition_fragment_C`
 
-除了通过 `ThrMMA` 实例调用的 `partition_fragment_C`，还有**静态版本**（不需要线程索引）：
+除了通过 `ThrMMA` 实例调用的 `partition_fragment_C`，还有静态版本（不需要线程索引）：
 
 ```cpp
 // 获取 C 的分区形状（静态，不需线程索引）
@@ -987,7 +1015,7 @@ partition_fragment_C(TiledMMA<Args...> const& mma, Shape_MN const& shapeMN)
 }
 ```
 
-**为什么有静态版本？** 累加器 C 的分区只依赖于 TiledMMA 的结构和目标形状，不依赖于具体线程索引（所有线程的 C 片段形状相同）。因此可以在编译期确定形状并分配。
+为什么有静态版本？累加器 C 的分区只依赖于 TiledMMA 的结构和目标形状，不依赖于具体线程索引（所有线程的 C 片段形状相同）。因此可以在编译期确定形状并分配。
 
 相比之下，`partition_fragment_A/B` 依赖于张量的实际布局和线程索引，不能在静态上下文中使用：
 
@@ -1159,7 +1187,7 @@ CUTLASS CuTe 的 MMA 抽象体现了**关注点分离**的设计原则：
 
 这意味着，例如，从 SM80 的 warp MMA 切换到 SM90 的 warpgroup MMA，只需更改 `make_tiled_mma` 的参数，上层代码（分区、调用）的结构保持不变。
 
-### 9.3 CuTe Layout 的核心作用
+### 9.3 CuTe Layout 的作用
 
 CuTe Layout 是贯穿整个抽象的核心工具。一个 Layout `L: (索引空间) -> (坐标空间)` 完全描述了数据如何组织和访问：
 
