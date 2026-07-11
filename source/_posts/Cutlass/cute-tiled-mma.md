@@ -279,7 +279,7 @@ ALayout，BLayout 和 CLayout 分别是指令在 A，B，C 三个矩阵上的 TV
 
 上图是 m16n8k16 指令在矩阵 A 上的 MN 布局，可以看到大小是 16×16，每个线程都负责其中的 8 个元素。下面介绍怎么从 MN-Layout 得到 TV-Layout。
 
-介绍之前要先解释一下 Cutlass 中的逻辑索引。Cutlass 中支持一维的逻辑索引。一个位置的逻辑索引就是该位置按照列主序索引得到的 offset。当使用逻辑索引时，默认是列主序的，也就是默认先从列方向索引。
+介绍之前先解释一下 Cutlass 中的逻辑索引。Cutlass 中支持一维的逻辑索引，一个位置的逻辑索引就是该位置按照列主序索引得到的 offset，也就是说当使用逻辑索引时，默认先从列方向索引。
 
 从前面 TV-Layout 的介绍可以知道，TV-Layout 中，第一维是线程的 Layout，第二维是 value 的 Layout。因为线程数是 32，一个线程负责矩阵 A 中的 8 个元素，所以第一维大小是 32，第二维大小是 8。
 
@@ -287,11 +287,28 @@ ALayout，BLayout 和 CLayout 分别是指令在 A，B，C 三个矩阵上的 TV
 
 然后看一个线程对应的元素的 layout。上图中，一个线程有 8 个元素，a0,a1 的逻辑索引是 16。a0,a2 的逻辑索引是 8，a0,a4 的逻辑索引是 128，所以 value 的 Layout 就是：Shape < _2, _2, _2>，Stride<_16, _8, _128>。
 
-
-
-
+因此 ALayout 就是 `<<_4, _8>, <_2, _2, _2>> : <<_32, _1>, <_16, _8, _128>>`。当用 thread idx 索引这个 TV-Layout 的第一维时就能得到这个线程对应的元素了。
 
 #### BLayout
+
+下面是 `SM80_16x8x16_F16F16F16F16_TN` 指令的 BLayout。
+
+```cpp
+  // (T32, V4) -> (N8, K16)
+  using BLayout = Layout<Shape <Shape < _4, _8>, Shape < _2,  _2>>,
+                         Stride<Stride<_16, _1>, Stride< _8, _64>>>;
+```
+
+![mma_m16n8k16_B](/assets/mma/mma_m16n8k16_B.png "mma")
+
+上图是 m16n8k16 指令在矩阵 B 上的 MN 布局，可以看到大小是 16×8，每个线程都负责其中的 4 个元素。但是 Cutlass 实际是按照 N×K，而不是 K×N 的形式计算 TV_Layout 的，不知道为什么，感觉应该是为了与 A 统一吧。
+
+下面介绍怎么从 B 的 MN-Layout 得到 TV-Layout。
+
+线程的 Layout 和 A 相同，可以看到 T0,T1,T2,T3 的逻辑索引间隔是 16（按照 N×K 考虑），T0,T4,...,T28 的逻辑索引间隔是 1，所以线程的 layout 就是：Shape < _4, _8>，Stride<_16, _1>。
+
+对于 value 来说，b0,b1 的间隔是 8，b0,b2 的间隔是 64，所以 value 的 Layout 就是 Stride<_16, _1>, Stride< _8, _64>。
+
 
 #### CLayout（`SM80_16x8_Row`）：
 
@@ -310,8 +327,6 @@ using SM80_16x8_Row = Layout<Shape <Shape < _4, _8>, Shape < _2, _2>>,
 ![mma_m16n8k16_C](/assets/mma/mma_m16n8k16_C.png "mma")
 
 上图是 mma 16x8x16 C 矩阵具体的 M×N 布局。从 M×N 布局可以得到上面的 TV-Layout 布局。
-
-Cutlass 中支持一维的逻辑索引。当使用逻辑索引时，默认是列主序的，也就是默认先从列方向索引。
 
 首先看线程的布局，可以看到 T0,T1,T2,T3 的逻辑索引间隔是 32，T0,T4,...,T28 的逻辑索引间隔是 1，所以线程的 layout 就是：Shape < _4, _8>，Stride<_32, _1>。
 
@@ -350,9 +365,19 @@ struct MMA_Traits<SM90_64x128x16_F16F16F16_SS<tnspA, tnspB, scaleA, scaleB>>
 ```
 
 **关键差异**：
-1. **`FrgTypeA/B` = `smem_desc`**：对于 SS（Shared-Shared）模式，A 和 B 的"片段"不是寄存器中的数据，而是指向共享内存的描述符。这意味着 `make_fragment_A` 会返回描述符视图而非数据拷贝。
+1. **`FrgTypeA/B` = `smem_desc`**：对于 SS（Shared-Shared）模式，A 和 B 的"片段"不是寄存器中的数据，而是指向共享内存的描述符。这意味着 `make_fragment_A` 会返回描述符视图而非数据拷贝。在 [wgmma 指令](/2026/05/16/PTX/wgmma/) 中通过打印 make_fragment_A 的结果也可以证明这一点。
 2. **`ThrID = Layout<_128>`**：128 个线程（一个 warpgroup = 4 个 warp）。
 3. **`accumulate_` 成员变量**：Traits 不仅仅是类型定义，还可以携带运行时参数（如是否累加），通过 `with()` 函数修改。
+
+同样的，Shape_MNK 是 wgmma 指令的大小，其中 m 固定为 64，k 固定为 16，n 是以 8 为步长，从 8-256 的整数。
+
+ThrID 表示线程的 Layout，一个 warpgroup 有 128 个线程。
+
+ALayout 和 BLayout 在这里因为是从共享内存中加载数据的，所有的线程都是相同的数据，所以就直接是 M×K 和 N×K 的大小了。
+
+CLayout 还是在寄存器中累加的，每个线程对应的元素都不一样，具体可以参考 sm80 的 CLayout 的创建过程。
+
+ScaleOut 是运行时可以设置的参数，GMMA::ScaleOut::One 表示可以累加，也就是 $D = A \times B + D$，GMMA::ScaleOut::Zero 表示不进行累加，也就是 $D = A \times B$。
 
 ### 3.3 Traits 的 `with()` 函数
 
@@ -602,11 +627,11 @@ struct TiledMMA : MMA_Atom
 - **ThrN**：N 方向上平铺的原子索引
 - **ThrK**：K 方向上平铺的原子索引
 
-**例如**：`TiledMMA<MMA_Atom<SM80_16x8x16_F32F16F16F32_TN>, Layout<Shape<2,4,1>>>` 表示：
-- 原子形状 16×8×16
-- 在 M 方向平铺 2 个原子，N 方向平铺 4 个原子，K 方向不平铺
-- 总形状：M=16×2=32, N=8×4=32, K=16
-- 总线程数：32 × 2 × 4 × 1 = 256（即 8 个 warp）
+**例如**：`TiledMMA<MMA_Atom<SM80_16x8x16_F32F16F16F32_TN>, Layout<Shape<2,2,1>>>` 表示：
+- 原子形状 16×8×16，有 32 个线程
+- 在 M 方向平铺 2 个原子，N 方向平铺 2 个原子，K 方向不平铺
+- 总形状：M=16×2=32, N=8×2=16, K=16
+- 总线程数：32 × 2 × 2 × 1 = 128（即 4 个 warp）
 
 ### 5.2 `thrfrg_C`：将 C 张量分区为线程-片段视图
 
