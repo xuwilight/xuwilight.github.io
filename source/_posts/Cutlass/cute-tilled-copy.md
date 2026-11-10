@@ -5,7 +5,8 @@ tags: [CUTLASS, CuTe, Copy]
 categories: [Cutlass 学习笔记, CuTe]
 description: 本文基于 CUTLASS 4.5.0 源码，深入分析 `include/cute/atom` 目录中 Copy（数据拷贝）相关组件的设计与实现。
 published: true
-mathjax: true
+render:
+  math: mathjax
 ---
 
 

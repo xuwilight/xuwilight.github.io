@@ -3,7 +3,8 @@ title: CuTe 学习笔记（五）Shared memory 和 Swizzle
 date: 2025-03-22 22:00:00
 tags: [CUTLASS, CuTe, Shared memory]
 categories: [Cutlass 学习笔记, CuTe]
-mathjax: true
+render:
+  math: mathjax
 description: 文章介绍了 Shared Memory 的基本特性与组织结构，深入剖析了 Bank Conflict 的产生原因和优化策略，最后介绍了 CuTe 中的 Swizzle 机制。
 ---
 

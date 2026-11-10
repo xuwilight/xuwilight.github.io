@@ -5,7 +5,8 @@ tags: [CUTLASS, CuTe, MMA]
 categories: [Cutlass 学习笔记, CuTe]
 description: 本文基于 CUTLASS 4.5.0 源码，深入分析 `include/cute/atom` 目录中 MMA（Matrix Multiply-Accumulate）相关组件的设计与实现，涵盖 TiledMMA 的创建、ThrMMA、partition 操作等。
 published: true
-mathjax: true
+render:
+  math: mathjax
 ---
 
 # CuTe tiledMMA
