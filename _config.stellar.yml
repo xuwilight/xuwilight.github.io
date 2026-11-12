@@ -19,7 +19,7 @@ leftbar:
   menu_columns: 3
   menu:
     - id: post
-      icon: default:home
+      icon: default:documents
       title: 博客
       url: /
     - id: categories
@@ -107,8 +107,15 @@ profiles:
 # 文章配置
 article:
   style: tech
+  paragraph_indent: never
+  banner:
+    background: false
   listing:
-    excerpt_length: 200
+    excerpt_length: 180
+    card_layout: hero
+    cover_ratio: 2
+    show_tags: false
+  show_reading_time: true
   footer:
     license: '本文采用 [署名-非商业性使用-相同方式共享 4.0 国际](https://creativecommons.org/licenses/by-nc-sa/4.0/) 许可协议，转载请注明出处。'
     share: []
@@ -127,29 +134,39 @@ comments:
 
 # 外观
 appearance:
-  # 原配置使用半透明侧栏和模糊效果，使用 glass 外观迁移
-  preset: glass
+  # Editorial Minimal：弱化容器装饰，让排版、留白和内容成为视觉重点
+  preset: minimal
   color_scheme: auto
   colors:
-    primary: '#1BCDFC'
+    primary: '#2563EB'
+    accent: '#0F766E'
+    link: '#2563EB'
 
   typography:
+    font_smoothing: antialiased
     font_family:
-      body: '"LXGW WenKai", "Noto Sans SC", "Noto Serif SC", "PingFang SC", "Microsoft YaHei", system-ui, -apple-system, sans-serif'
-      code: '"Monaco", "Consolas", "Cascadia Code", "JetBrains Mono", "Fira Code", Menlo,  "Courier New", monospace'
+      body: '"Noto Serif SC", system-ui, "Microsoft YaHei", "Segoe UI", Arial, sans-serif'
+      code: 'Monaco, Menlo, Consolas, system-ui, monospace, sans-serif'
+    font_weight:
+      400: 300
+      500: 700
+      600: 700
+      700: 700
     font_size:
       root: 16px
       inline_code: 85%
-      code_block: 0.8125rem
+      code_block: 0.875rem
+    content_align: left
 
   shape:
+    corner: superellipse(1.15)
     radius:
-      card_large: 16px
-      card: 8px
+      card_large: 18px
+      card: 12px
       card_small: 8px
-      bar: 8px
-      image_large: 24px
-      image: 16px
+      bar: 10px
+      image_large: 20px
+      image: 12px
       image_small: 8px
 
   backgrounds:
@@ -162,11 +179,15 @@ appearance:
       backdrop:
         radius: 100px
         saturation: 100%
+  code_block:
+    scrollbar_width: 6px
 
 # 功能
 features:
   math:
     provider: mathjax
+    mathjax:
+      js: https://gcore.jsdelivr.net/npm/mathjax@3.2.2/es5/tex-mml-chtml.min.js
   color_scheme_switch:
     enabled: true
 
@@ -174,6 +195,6 @@ features:
 inject:
   head_end: |
     <link rel="preconnect" href="https://gcore.jsdelivr.net" crossorigin>
-    <link rel="stylesheet" href="https://gcore.jsdelivr.net/npm/lxgw-wenkai-webfont@1.7.0/lxgwwenkai-regular.css">
-    <link rel="stylesheet" href="https://gcore.jsdelivr.net/npm/lxgw-wenkai-webfont@1.7.0/lxgwwenkai-bold.css">
+    <link rel="stylesheet" href="https://gcore.jsdelivr.net/npm/@fontsource/noto-serif-sc@5.3.0/chinese-simplified-300.css">
+    <link rel="stylesheet" href="https://gcore.jsdelivr.net/npm/@fontsource/noto-serif-sc@5.3.0/chinese-simplified-700.css">
     <link rel="stylesheet" href="/css/custom.css">
