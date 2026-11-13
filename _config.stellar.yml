@@ -143,12 +143,12 @@ appearance:
     link: '#2563EB'
 
   typography:
-    font_smoothing: antialiased
+    font_smoothing: auto
     font_family:
       body: '"Noto Serif SC", system-ui, "Microsoft YaHei", "Segoe UI", Arial, sans-serif'
       code: 'Monaco, Menlo, Consolas, system-ui, monospace, sans-serif'
     font_weight:
-      400: 300
+      400: 400
       500: 700
       600: 700
       700: 700
