@@ -1,7 +1,7 @@
 ---
 title: CuTe 学习笔记（三）Layout Algebra（二）
 date: 2025-03-21 18:00:00
-tags: [CUTLASS, CuTe, Layout]
+tags: [CUTLASS, CuTe]
 categories: [Cutlass 学习笔记, CuTe]
 render:
   math: mathjax

@@ -1,7 +1,7 @@
 ---
 title: CuTe 学习笔记（四）CuTe Tensor
 date: 2025-03-22 18:00:00
-tags: [CUTLASS, CuTe, Tensor]
+tags: [CUTLASS, CuTe]
 categories: [Cutlass 学习笔记, CuTe]
 render:
   math: mathjax

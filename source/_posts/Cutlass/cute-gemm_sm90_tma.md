@@ -1,8 +1,8 @@
 ---
 title: CuTe 学习笔记（十三）GEMM SM90 TMA
 date: 2025-04-25 18:00:00
-tags: [CUTLASS, GEMM, TMA]
-categories: [Cutlass 学习笔记]
+tags: [CUTLASS, CuTe]
+categories: [Cutlass 学习笔记, CuTe]
 description: gemm_sm90_tma 用 TMA 由单线程一条指令搬完整个 tile、把 gmem→smem 搬运卸载给硬件，并用 mbarrier 做 producer/consumer 双向同步，写出真正重叠的异步流水。
 ---
 
@@ -12,7 +12,7 @@ description: gemm_sm90_tma 用 TMA 由单线程一条指令搬完整个 tile、�
 
 矩阵规模 M = N = 5120、K = 4096，全是 half，A、B 都是 K-major（TN GEMM），C 列主序。编译同样需要 `sm_90a`。
 
-## 与 SM90 的区别
+与 SM90 GEMM 的区别如下：
 
 | | gemm_sm90 | gemm_sm90_tma |
 |---|---|---|
@@ -25,7 +25,7 @@ description: gemm_sm90_tma 用 TMA 由单线程一条指令搬完整个 tile、�
 
 核心变化就是把"线程主动搬"换成"硬件异步搬 + 屏障通知"，gmem 拷贝不再和计算抢线程资源。
 
-## gemm_tn 的规模、smem、MMA 与 TMA atom
+## Host 端设置
 
 矩阵规模 M = N = 5120、K = 4096，全是 half。CTA tile 是 128×128×64，bP = 3 级流水：
 
@@ -103,7 +103,6 @@ tmaB:Copy_Atom
 
 `ThrID = _1` 表示 TMA 只由一个线程触发；`(_1,_8192)` 表示一条 TMA 指令就搬 128×64 = 8192 个 half。
 
-### TMA 用坐标 tensor 寻址
 
 TMA 的 PTX 指令如下（2D 版本）：
 
@@ -163,7 +162,7 @@ ArithTuple(0,0) o (4,5):(_1@1,_1@0):
 
 这个差异由 `make_tma_atom` 根据 gmem tensor 的实际 layout 和 smem tile 自动推出来，不用手写。
 
-## kernel 内的 TMA 坐标 tensor 与分区
+## TMA tensor
 
 进入 kernel，gmem tensor 改用 `get_tma_tensor` 生成——返回的是坐标 tensor：
 
@@ -304,7 +303,7 @@ tAsA: Sw<3,4,3>_smem_ptr[16b](0x7f7700000400) o ((_8192,_1),(_1,_3)):((_1,_0),(_
 
 A、B 各 8192 个 half = 16 KB，加起来 32 KB。
 
-## 基于 mbarrier 的 producer / consumer 双向同步
+## mbarrier 定义
 
 ```cpp
   int warp_idx = cutlass::canonical_warp_idx_sync();
@@ -330,7 +329,7 @@ A、B 各 8192 个 half = 16 KB，加起来 32 KB。
 
 一个 mbarrier 的"一个阶段完成"要同时满足：arrive_count 归零且 expectation bytes 归零。
 
-## 预取阶段用 TMA 填满所有 pipe
+## TMA 预取
 
 ```cpp
   auto K_PIPE_MAX = size<1>(tAsA);
@@ -378,7 +377,7 @@ tCrB : GMMA::DescriptorIterator o (_1,_2,_4,(_1,_3)):(_0,_512,_2,(_0,_1024))
 tCrC : ptr[16b](0x7fea69fffbd0) o ((_2,_2,(_8,_2)),_2,_1):((_1,_2,(_4,_32)),_64,_0)
 ```
 
-## 主循环靠 mbarrier 而非指令顺序做同步
+## 主循环
 
 ```cpp
   auto write_state = cutlass::PipelineState<K_PIPE_MAX>();             // TMA writes

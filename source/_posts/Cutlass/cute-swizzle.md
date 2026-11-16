@@ -1,7 +1,7 @@
 ---
 title: CuTe 学习笔记（五）Shared memory 和 Swizzle
 date: 2025-03-22 22:00:00
-tags: [CUTLASS, CuTe, Shared memory]
+tags: [CUTLASS, CuTe]
 categories: [Cutlass 学习笔记, CuTe]
 render:
   math: mathjax
@@ -377,9 +377,3 @@ swizzle 后的 Layout 如下。经过 swizzle 后，相同颜色的数据以 8 �
 1. https://zhuanlan.zhihu.com/p/4746910252
 1. https://zhuanlan.zhihu.com/p/671419093
 
-
-
-{% blockquote %}
-文章首发于知乎，此处做了部分修改。
-{% link https://zhuanlan.zhihu.com/p/1906737849576953561 desc:true %}
-{% endblockquote %}

@@ -1,8 +1,8 @@
 ---
 title: CuTe 学习笔记（十）SGEMM 02
 date: 2025-04-12 18:00:00
-tags: [CUTLASS, GEMM]
-categories: [Cutlass 学习笔记]
+tags: [CUTLASS, CuTe]
+categories: [Cutlass 学习笔记, CuTe]
 description: sgemm_02 在 sgemm_01 的骨架上，用 TiledCopy 和 TiledMMA 替换手写的线程布局，并通过 gmem→rmem→smem 的寄存器中转实现软件流水。
 ---
 

@@ -1,8 +1,8 @@
 ---
 title: CuTe 学习笔记（十二）GEMM SM90
 date: 2025-04-22 18:00:00
-tags: [CUTLASS, GEMM]
-categories: [Cutlass 学习笔记]
+tags: [CUTLASS, CuTe]
+categories: [Cutlass 学习笔记, CuTe]
 description: gemm_sm90 用 Hopper 的 wgmma 指令做计算，A、B 直接从 shared memory 经 GMMA 描述符读取，配合 swizzle smem 布局和 warpgroup 同步机制。
 ---
 
@@ -18,7 +18,7 @@ nvcc wgmma_sm90.cu -o wgmma -I ../../../../include/ -I ../../../../tools/util/in
 
 直接进入 `gemm_tn`。
 
-## 规模、smem swizzle 与描述符布局
+## Host 端设置
 
 先定义全局矩阵的规模与 stride。A、B 都是 K-major，K 方向 stride = 1，M/N 方向是 leading dim；C 列主序，M 方向 stride = 1：
 
@@ -102,7 +102,7 @@ Sw<3,4,3> o smem_ptr[16b] o ((_8,16),(_64,1)):((_64,_512),(_1,8192))
 
 > 关于 `Swizzle` 中间那个数：`_Bits` 版本里是 `4`（字节基元，2⁴=16 字节），`upcast` 成 half 元素后应变成 `3`（2³=8 个 half = 16 字节）。但直接打印 `sA`（swizzle 还挂在字节寻址的 `smem_ptr_flag` 上）时看到的仍是 `4`；等后面调用 `as_position_independent_swizzle_tensor` 把 swizzle 真正 recast 到 half 元素寻址，就会变成 `Sw<3,3,3>`。
 
-## cp.async 拷贝与 TiledMMA
+## cp.async 与 TiledMMA
 
 ```cpp
   TiledCopy copyA = make_tiled_copy(Copy_Atom<SM80_CP_ASYNC_CACHEALWAYS<uint128_t>, TA>{},
@@ -328,7 +328,6 @@ GMMA::DescriptorIterator o (_1,_2,_4):(_0,_512,_2):
 
 `layout_type = 0x1 (B128)` 对应 `LayoutType::B128`（`Swizzle<3,4,3>`），`leading_off = 1`、`stride_off = 64` 正是前面算出的 LBO / SBO。整个过程 A、B 一个数据寄存器都没占。
 
-## as_position_independent_swizzle_tensor
 
 拷贝端要把数据写进 swizzle 过的 smem，但 `partition_D` 需要知道 swizzle 后的真实地址。这一步由 `as_position_independent_swizzle_tensor` 完成：
 
@@ -355,7 +354,7 @@ tAsA = smem_ptr[16b](0x...) o ((_8,_1),_8,_1,(_1,_3)):((_1,_0),_1024,_0,(_0,_819
 
 `tAgA` 第一维 8 是连续的 8 个 half（stride 1），第二维相隔 16 行（stride 16×4096=65536），末维 64 是不同 K tile（stride 64）；`tAsA` 结构相同，只是行间隔换成 smem 的 1024、stage 间隔 8192。
 
-## kernel 内的分区与预取
+## 分区与预取
 
 先为 gmem 创建视图，再 `local_tile` 分块，用动态 `extern __shared__` 申请 smem：
 
@@ -447,7 +446,7 @@ sA 的 layout 是 `((_8,16),(_64,1),(_1,3)):((_64,_512),(_1,_0),(_0,_8192))`。`
 
 和 SM80 一样，`cp_async_fence()` 即 `cp.async.commit_group`，把已发射的异步拷贝打包成一个 group。
 
-## 主循环中的 wgmma 与 warpgroup 同步
+## 主循环
 
 ```cpp
   int k_pipe_read  = 0;

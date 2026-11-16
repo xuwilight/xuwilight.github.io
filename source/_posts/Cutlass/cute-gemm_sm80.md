@@ -1,8 +1,8 @@
 ---
 title: CuTe 学习笔记（十一）GEMM SM80
 date: 2025-04-20 18:00:00
-tags: [CUTLASS, GEMM]
-categories: [Cutlass 学习笔记]
+tags: [CUTLASS, CuTe]
+categories: [Cutlass 学习笔记, CuTe]
 description: sgemm_sm80 用 cp.async 做异步拷贝、用 bP = 3 的多级 shared memory 环形流水重叠搬运与计算；half 版本还引入 mma.sync、ldmatrix 和 swizzle，第一次用上 Tensor Core。
 ---
 
@@ -21,7 +21,7 @@ half 版本还额外用上 `mma.sync`、`ldmatrix` 和 swizzle——这是这个
 
 矩阵规模还是 M = N = 5120、K = 4096，A、B 都是 K-major（TN GEMM），C 列主序。
 
-## 与 sgemm_02 的区别
+与 sgemm_02 的区别如下
 
 | | sgemm_02 | sgemm_sm80 |
 |---|---|---|
@@ -33,7 +33,7 @@ half 版本还额外用上 `mma.sync`、`ldmatrix` 和 swizzle——这是这个
 
 核心变化就是把"用寄存器中转"换成了"用硬件异步拷贝 + 多级 smem 缓冲"。
 
-## 定义规模、布局与流水
+## 参数设置
 
 strides、CTA tile 和前面一样，变化在 `bP` 和 shared memory 布局：
 
@@ -73,7 +73,7 @@ pipe 维的 stride 是 1032，约等于单个 stage 的大小（1032 个元素�
 
 另外要强调一点：`sC` 只是一个 layout，用来描述输出 `gC` 的分块方式，并不会占用 shared memory。真正申请 smem 的只有 A、B 两块（kernel 里的 `SharedStorage` 只包含 `A`、`B` 两个数组）。
 
-## cp.async 拷贝与 TiledMMA
+## cp.async 与 TiledMMA
 
 ```cpp
   TiledCopy copyA = make_tiled_copy(Copy_Atom<SM80_CP_ASYNC_CACHEALWAYS<TA>, TA>{},
@@ -93,7 +93,7 @@ pipe 维的 stride 是 1032，约等于单个 stage 的大小（1032 个元素�
 
 `mmaC` 用 `UniversalFMA`（`a*b+c`）铺成 16×16 的线程布局，256 个线程各做一个 FMA。具体原理见前面的 TiledMMA / TiledCopy 两篇。
 
-## kernel 内的 gmem→smem 分块与预取
+## 分块与预取
 
 创建 tensor、`local_tile` 分块和前面一样：
 
@@ -172,7 +172,7 @@ float 版本的划分关系：`mmaC` 线程布局 16×16、`sA` 是 128×8。16 
 
 `clear(tCrC)` 把累加器清零。
 
-## smem→rmem 的 Copy Atom retiling
+## Copy Atom retiling
 
 有了 MMA 的分区，还差一步，就是把 `sA` 里的数据高效地搬进 `tCrA` 寄存器。统一做法是通过一个 smem→reg 的 copy atom 重新分块：
 
@@ -195,7 +195,7 @@ smem 用 `partition`、rmem 用 `retile`，是因为两者的数据归属不同�
 
 对 float，`s2r_atom` 传的是 `Copy_Atom<AutoVectorizingCopy, TA>{}`，原理相同，只是没有 `ldmatrix`、只是向量化搬运。
 
-## 主循环与三级 smem 流水
+## 主循环
 
 进入循环前还有一层"寄存器流水"的预取：
 
@@ -290,11 +290,11 @@ smem 用 `partition`、rmem 用 `retile`，是因为两者的数据归属不同�
 
 `while (k_tile_count > -(K_PIPE_MAX-1))` 的边界：`k_tile_count` 是"还没发射的 gmem tile 数"，初始已被预取减到 510；循环里每轮 `--`，当它减到 `-(K_PIPE_MAX-1) = -2` 时退出，多跑的这两轮正好用来把预取阶段塞进流水、还没被消费的最后两块收尾算掉。
 
-## HALF 版的 mma + ldmatrix + swizzle
+## HALF 版
 
 half + TN 命中的是一个手写重载，它把 float 版的 FMA 换成真正的 Tensor Core 指令，其余流水骨架完全一致。主要差别有三处。
 
-### 1. 规模、swizzle 和向量化 cp.async
+### 1. tiledcopy
 
 ```cpp
   auto bK = Int< 64>{};

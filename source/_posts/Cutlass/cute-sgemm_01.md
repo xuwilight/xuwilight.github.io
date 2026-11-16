@@ -1,8 +1,8 @@
 ---
 title: CuTe 学习笔记（九）SGEMM 01
 date: 2025-04-06 18:00:00
-tags: [CUTLASS, GEMM]
-categories: [Cutlass 学习笔记]
+tags: [CUTLASS, CuTe]
+categories: [Cutlass 学习笔记, CuTe]
 description: 从最基础的 CuTe 矩阵乘例子 sgemm_1 出发，分析如何用 local_tile 按 thread block 分块、用 local_partition 按线程分块，并在 K 方向上循环累加。
 ---
 
