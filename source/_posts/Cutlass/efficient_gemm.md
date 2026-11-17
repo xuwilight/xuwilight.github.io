@@ -1,141 +1,134 @@
 ---
-title: Cutlass 学习笔记（五）Efficient GEMM
-date: 2025-08-19 12:00:00
-tags: [CUTLASS, GEMM]
+title: Cutlass 学习笔记（四）Efficient GEMM
+date: 2025-08-18 12:00:00
+tags: [CUTLASS]
 categories: [Cutlass 学习笔记,Cutlass]
-description: 深入解析 CUTLASS GEMM 的分层结构，从线程块级、warp 级到指令级的分块策略与并行编程模型。
+description: 深入解析 CUTLASS GEMM 的分层结构，从线程块级、warp 级到指令级的分块策略与并行编程模型，并介绍尾声、软件流水线、线程块光栅化、分块归约和 Hopper warp 专用等优化手段。
 ---
 
-## Hierarchical Structure
+## 分层结构
 
-基本的矩阵乘法三重循环嵌套计算可以分块和分块执行，以匹配硬件并发性、内存局部性和并行编程模型。在 CUTLASS 中，GEMM 被映射到 NVIDIA GPU，其结构如下循环嵌套所示。
+基本的矩阵乘法三重循环嵌套可以分块、分 tile 执行，以匹配硬件并发、内存局部性和并行编程模型。CUTLASS 把 GEMM 映射到 NVIDIA GPU 时采用如下循环嵌套结构。
 
-```python
-for (int cta_n = 0; cta_n < GemmN; cta_n += CtaTileN) {                     // for each threadblock_y           } threadblock-level concurrency
-  for (int cta_m = 0; cta_m < GemmM; cta_m += CtaTileM) {                   //    for each threadblock_x        }
+```c++
+for (int cta_n = 0; cta_n < GemmN; cta_n += CtaTileN) {                     // for each threadblock_y           } threadblock-level concurrency
+  for (int cta_m = 0; cta_m < GemmM; cta_m += CtaTileM) {                   //    for each threadblock_x        }
 
-    for (int cta_k = 0; cta_k < GemmK; cta_k += CtaTileK) {                 //       "GEMM mainloop" - no unrolling
-                                                                            //                       - one iteration of this loop is one "stage"
-                                                                            //
-      for (int warp_n = 0; warp_n < CtaTileN; warp_n += WarpTileN) {        // for each warp_y                  } warp-level parallelism
-        for (int warp_m = 0; warp_m < CtaTileM; warp_m += WarpTileM) {      //    for each warp_x               }
-                                                                            //
-          for (int warp_k = 0; warp_k < CtaTileK; warp_k += WarpTileK) {         //       fully unroll across CtaTileK
-                                                                            //         - one iteration of this loop is one "k Group"
-                                                                            //
-            for (int mma_k = 0; mma_k < WarpTileK; mma_k += MmaK) {         // for each mma instruction         } instruction-level parallelism
-              for (int mma_n = 0; mma_n < WarpTileN; mma_n += MmaN) {       //    for each mma instruction      }
-                for (int mma_m = 0; mma_m < WarpTileM; mma_m += MmaM) {     //        for each mma instruction  }
-                                                                            //
-                  mma_instruction(d, a, b, c);                              //            TensorCore matrix computation
+    for (int cta_k = 0; cta_k < GemmK; cta_k += CtaTileK) {                 //       "GEMM mainloop" - no unrolling
+                                                                            //                       - one iteration of this loop is one "stage"
+                                                                            //
+      for (int warp_n = 0; warp_n < CtaTileN; warp_n += WarpTileN) {        // for each warp_y                  } warp-level parallelism
+        for (int warp_m = 0; warp_m < CtaTileM; warp_m += WarpTileM) {      //    for each warp_x               }
+                                                                            //
+          for (int warp_k = 0; warp_k < CtaTileK; warp_k += WarpTileK) {         //       fully unroll across CtaTileK
+                                                                            //         - one iteration of this loop is one "k Group"
+                                                                            //
+            for (int mma_k = 0; mma_k < WarpTileK; mma_k += MmaK) {         // for each mma instruction         } instruction-level parallelism
+              for (int mma_n = 0; mma_n < WarpTileN; mma_n += MmaN) {       //    for each mma instruction      }
+                for (int mma_m = 0; mma_m < WarpTileM; mma_m += MmaM) {     //        for each mma instruction  }
+                                                                            //
+                  mma_instruction(d, a, b, c);                              //            TensorCore matrix computation
 
-                }   // for mma_m
-              }   // for mma_n
-            }   // for mma_k
+                }   // for mma_m
+              }   // for mma_n
+            }   // for mma_k
 
-          }   // for warp_k
-        }   // for warp_m
-      }   // for warp_n
+          }   // for warp_k
+        }   // for warp_m
+      }   // for warp_n
 
-    }   // for cta_k
-  }   // for cta_m
-}   // for cta_n
+    }   // for cta_k
+  }   // for cta_m
+}   // for cta_n
 ```
 
-这种平铺循环嵌套旨在提高 threadblock，warps 和 CUDA Tensor Core 的并发性，并且可以在寄存器和共享内存中很好的利用内存的局部性。
+这种分 tile 的循环嵌套针对线程块、warp 以及 CUDA 与 Tensor Core 之间的并发，并利用共享内存和寄存器中的内存局部性。
 
-下图展示了该结构中的数据流。这是 CUTLASS 所实现的层级式 GEMM 计算。每个阶段都描绘了一个嵌套的平铺层级，对应于 CUDA 执行模型中的一个并发层级以及内存层次结构中的一个层级，从左到右层级越来越精细。
+下图展示了该结构中的数据流，这是 CUTLASS 所实现的层级式 GEMM 计算。每一级都描绘了一个嵌套的分块层级，对应 CUDA 执行模型中的一个并发层级和内存层次结构中的一个层级，从左到右越来越细。
 
 ![](/assets/efficient_gemm/image.png)
 
-### Threadblock-level GEMM
+### 线程块级 GEMM
 
-每个线程块通过迭代加载输入矩阵的分块并计算累积矩阵乘积来计算其在输出 GEMM 中的份额。在线程块级别，数据从全局内存加载。通常，分块策略是提高效率的关键。然而，程序员必须平衡多个相互冲突的目标。更大的线程块意味着更少的全局内存读取操作，从而确保 DRAM 带宽不会成为瓶颈。但是，较大的线程块可能与问题的维度不匹配。如果 GEMM 的 M 或 N 维度较小，则线程块中的某些线程可能无法执行有意义的工作，因为线程块可能部分超出问题的边界。如果 M 和 N 都很小而 K 很大，则此方案可能启动的线程块相对较少，并且无法充分利用 GPU 中的所有多处理器。针对这种情况，如“并行归约”部分所述，优化性能的策略是将 GEMM 的 K 维度划分到多个线程块或多个线程束中。这些线程块或线程束并行计算矩阵乘积；然后对乘积进行归约以计算结果。
+每个线程块迭代地加载输入矩阵的分块并计算累积乘积，以此完成它在输出 GEMM 中的份额。在线程块这一级，数据从全局内存加载。分块策略通常是效率的关键，但程序员要在多个相互冲突的目标间权衡。更大的线程块意味着更少的全局内存读取，从而保证 DRAM 带宽不成为瓶颈；然而大的线程块 tile 可能与问题维度并不匹配。如果 GEMM 的 M 或 N 维度较小，线程块就可能部分落在问题边界之外，使其中部分线程无法做有意义的工作。如果 M、N 都小、K 很大，这种方案启动的线程块可能相对较少，无法充分利用 GPU 的所有多处理器。针对这种情况，如并行归约一节所述，优化的做法是把 K 维度划分到多个线程块或多个 warp 上，并行计算矩阵乘积，再对乘积做归约得到结果。
 
-在 CUTLASS 中，线程块单元的尺寸指定为 ThreadblockShape::{kM, kN, kK}，并且可以进行调整，以使 GEMM 计算更适合目标处理器和 GEMM 问题的维度。
+在 CUTLASS 中，线程块 tile 的尺寸由 ThreadblockShape::{kM, kN, kK} 指定，可以针对目标处理器和 GEMM 问题维度进行调优。
 
-### Warp-level GEMM
+### warp 级 GEMM
 
-warp 级 GEMM 映射到 CUDA 执行模型中的 warp 级并行性。线程块内的多个 warp 从共享内存中获取数据到寄存器并执行计算。warp 级 GEMM 可以通过 TensorCores 发出 mma.sync 或 wmma 指令来实现，也可以通过向 CUDA 核心发出线程级矩阵计算指令来实现。为了获得最佳性能，对共享内存的访问应避免 bank 冲突。为了最大限度地提高 warp 内的数据重用率，应选择较大的 warp 级 GEMM tile。
+warp 级 GEMM 对应 CUDA 执行模型中的 warp 级并行。线程块内的多个 warp 从共享内存取数据到寄存器并执行计算。warp 级 GEMM 既可以用 Tensor Core 发出 mma.sync 或 wmma 指令实现，也可以用面向 CUDA Core 的 thread 级矩阵计算指令实现。为了获得最佳性能，共享内存访问应当无 bank 冲突；为了最大化 warp 内的数据复用，应选择较大的 warp 级 GEMM tile。
 
-### Thread-level GEMM
+### thread 级 GEMM
 
-在分块的最底层，每个线程负责处理一定数量的元素。线程之间无法访问彼此的寄存器，因此我们选择了一种允许多个数学指令重用寄存器中存储的值的组织方式。这导致线程内部形成一个二维的平铺结构，其中每个线程向 CUDA 核心发出一系列独立的数学指令，并计算累积的外积。
+在分块的最底层，每个线程负责处理一定数量的元素。线程之间无法访问彼此的寄存器，因此需要选择一种组织方式，让寄存器中的值能被多条数学指令复用。这带来线程内部的二维分块结构，每个线程向 CUDA Core 发出一系列独立的数学指令，计算一个累积外积。
 
-SGEMM、IGEMM、HGEMM 和 DGEMM 由线程级矩阵乘法过程发出的 SIMT 数学指令计算得出。
+SGEMM、IGEMM、HGEMM 和 DGEMM 由 thread 级矩阵乘过程发出的 SIMT 数学指令计算得出。
 
-## Epilogue
+## 尾声
 
-上述代码仅关注矩阵乘法运算 C = AB，其结果保存在线程块内每个线程的寄存器中。输出块中逻辑元素到每个线程的映射旨在最大化矩阵乘法运算的性能，但并未实现高效的全局内存加载和存储操作。
+上面的代码只关注矩阵乘法 C = AB，其结果保存在线程块内每个线程的寄存器中。把输出 tile 的逻辑元素映射到各线程的方式是为了最大化矩阵乘性能，并不能带来高效、合并的全局内存读写。
 
-尾声阶段是一个独立的阶段，在此阶段，线程通过共享内存交换数据，然后使用高效的访问模式协作访问全局内存。此外，在此阶段，可以使用矩阵乘法结果作为输入，方便地计算线性缩放和其他逐元素运算。
+尾声（epilogue）是一个独立阶段，线程先通过共享内存交换数据，再用高效的条带访问模式协作访问全局内存。在这个阶段，还可以方便地以矩阵乘积结果为输入，计算线性缩放和其他逐元素操作。
 
-CUTLASS 定义了一些典型的尾声阶段操作，例如线性缩放和 clamp，但也可以使用其他设备端函数调用运算符来执行自定义操作。
+CUTLASS 定义了一些典型的尾声操作，例如线性缩放和钳制，但也可以使用其他设备端函数调用算子执行自定义操作。
 
-## Optimizations
+## 优化
 
-上述层级结构能够高效地映射到 NVIDIA GPU 中的 CUDA 执行模型和 CUDA/TensorCores。以下章节将介绍如何在设计空间的各个角落获得最佳性能，最大限度地提高并行性，并尽可能利用数据局部性。
+上述层级结构能高效映射到 NVIDIA GPU 的 CUDA 执行模型和 CUDA/Tensor Core 上。下面几节介绍在设计空间各个角落取得峰值性能的策略，尽可能最大化并行并利用数据局部性。
 
-### Pipelining
+### 软件流水线
 
-这种 block 结构需要在每个 CUDA 线程的寄存器中分配大量的存储空间。累加器元素通常至少占用线程总寄存器预算的一半。因此，与其他类型的 GPU 工作负载相比，其占用率（即并发线程、线程束和线程块的数量）相对较低。这限制了 GPU 通过在 SM 内切换到其他并发线程来隐藏内存延迟和其他停顿的能力。
+这种分块结构要求每个 CUDA 线程在寄存器中分配大量存储，累加器元素通常至少占一个线程寄存器预算的一半。因此与其它类别的 GPU 负载相比，占用率（并发的线程、warp 和线程块数量）相对较低，这限制了 GPU 通过在 SM 内切换到其他并发线程来隐藏内存延迟和其他停顿的能力。
 
-为了缓解内存延迟的影响，CUTLASS 使用软件流水线技术将内存访问与线程内的其他计算重叠。CUTLASS 通过在以下作用域中使用双缓冲来实现这一点：
+为缓解内存延迟的影响，CUTLASS 用软件流水线把内存访问与线程内的其他计算重叠起来，具体通过在以下作用域做双缓冲实现。
 
-线程块作用域的共享内存块：在共享内存中分配两个内存块。一个用于加载当前矩阵运算的数据，另一个用于缓冲从全局内存加载的数据，以供下一次主循环迭代使用。
+- 线程块级共享内存 tile。在共享内存中分配两个 tile，一个用于加载当前矩阵运算的数据，另一个用于缓冲从全局内存加载、供下一次主循环迭代使用的数据。
+- warp 级矩阵片段。在寄存器中分配两个片段，一个在当前矩阵计算期间交给 CUDA 与 Tensor Core，另一个用于接收共享内存取回的数据，供下一次 warp 级矩阵运算使用。
 
-线程束作用域的矩阵片段：在寄存器中分配两个矩阵片段。一个片段在当前矩阵计算期间传递给 CUDA 和 TensorCores，而另一个片段用于接收共享内存的获取结果，以供下一个 warp 级矩阵运算使用。
-
-下图展示了 CUTLASS GEMM 中使用的高效流水线式主循环体。
+下图展示了 CUTLASS GEMM 中高效、流水化的主循环体。
 
 ![](/assets/efficient_gemm/image(1).png)
 
-### Threadblock Rasterization
+### 线程块光栅化
 
-为了最大限度地重用 L2 缓存中的数据，CUTLASS 定义了多个函数来影响线程块到 GEMM 问题逻辑分区的映射。这些函数将连续启动的线程块映射到分区 GEMM 问题的二维压缩区域，从而提高它们在大致相同的时间访问全局内存相同块的概率。
+为了最大化利用 L2 缓存中的数据，CUTLASS 定义了若干函数来影响线程块到 GEMM 问题逻辑分区的映射。它们把连续启动的线程块映射到分区问题的二维紧密区域，提高这些线程块在大致相同时间访问同一批全局内存 tile 的概率。相关定义位于 cutlass/gemm/threadblock/threadblock_swizzle.h。
 
-这些函数定义在 cutlass/gemm/threadblock_swizzle.h 文件中。
+### 并行归约
 
-### Parallelized Reductions
+#### Split K 跨线程块归约
 
-**Split K - reduction across threadblocks**
+矩阵乘积计算在 O(MN) 个独立内积之间暴露了并行性。对足够大的问题，CUTLASS 的 GEMM kernel 可以接近理论最大计算吞吐；但对于小问题，线程块太少，无法有效占满整个 GPU。
 
-矩阵乘法计算揭示了 O(MN) 个独立内积计算之间的并行性。对于足够大的问题规模，CUTLASS 中的 GEMM 内核可以接近理论最大计算吞吐量。然而，对于小问题，线程块数量太少，无法有效地利用整个 GPU。
+作为一种补救，把内积计算中的归约并行化，可以让更多线程块并发执行，同时仍享受大线程块级 GEMM tile 带来的吞吐优势。CUTLASS 通过划分 GEMM 的 K 维度、为每个分区额外启动一组线程块来实现跨线程块的并行归约，这种策略在内称为"并行归约 splitK"。它需要执行两个 kernel：partitionedK GEMM 和批处理归约。
 
-作为一种解决方案，并行化内积计算期间执行的归约操作，使得更多线程块可以并发执行，同时仍然能够利用大型线程块级 GEMM 块的吞吐量优势。
+PartitionedK GEMM 类似一种批处理步长 GEMM 的变体。它不要求用户给出每个批次的问题规模，而是给出总体问题规模和沿 K 维度的分区数。例如 m=128、n=128、k=4096、partition=16，会得到 16 个批处理步长 GEMM，每个批次为 m=128、n=128、k=256。PartitionedK 也允许 k 不能被分区数整除。例如 m=128、n=128、k=4096、partition=20，会得到 20 个批处理步长 GEMM，前 19 个批次为 m=128、n=128、k=4096/20=204，最后一个批次为 m=128、n=128、k=220。批处理归约 kernel 以 partitionedK GEMM 的输出 C 为输入，沿 K 维度做归约，用户需要管理工作区内存来存放这个中间结果。
 
-CUTLASS 通过对 GEMM 的 K 维度进行分区，并为每个分区启动一组额外的线程块，来实现跨线程块的并行归约。因此，我们在 CUTLASS 中将此策略称为“并行归约 splitK”。“并行归约 splitK”策略需要执行两个内核：分区 K GEMM 和批处理归约。
+#### Sliced K 跨 warp 归约
 
-分区 K GEMM 类似于批处理步长 GEMM 的一种变体。 partitionedK GEMM 不要求用户指定每个批次的具体问题规模，而是要求用户提供总体问题规模以及沿 K 维度对操作数 A 和 B 进行分区的数量。例如，参数 m=128、n=128、k=4096 和 partition=16 将生成 16 个分批步长 GEMM，每个批次的参数为 m=128、n=128 和 k=256。PartitionedK 也允许 k 不能被分区数整除的情况。
+与 split-k 类似，sliced-k 旨在提升 M、N 维度较小而 K 维度较大时的 kernel 效率。在线程块一级，CtaTileN 和 CtaTileM 通过把工作划分给不同 warp 来体现并行性。更大的 warpTile 能带来更好的指令级并行（ILP）和复用，但也会限制每个线程块内运行的 warp 数量，从而降低效率。
 
-例如，参数 m=128、n=128、k=4096 和 partition=20 将生成 20 个分批步长 GEMM。前 19 个批次的参数为 m=128、n=128 和 k=4096/20=204，最后一个批次的参数为 m=128、n=128 和 k=220。批量归约内核以分区 K 维 GEMM 的输出(C)作为输入，并沿 K 维执行归约。用户必须管理工作区内存以存储此中间结果。
+为提升这类场景的效率，除了 ctaTileK 之外再对 warpTile 做划分，能让更多 warp 在 CTA 中并发运行，更充分地利用硬件。sliced-k kernel 不仅在 CtaTileN、CtaTileM 维度，也在 CtaTileK 维度上划分线程块的计算。因此 sliced-k 会带来一点开销，需要在最后对参与的各 warp 做归约，因为每个 warp 只用 CtaTileK 的一个切片计算，归约前只持有部分和。
 
-**Sliced K - reduction across warps**
+### Hopper warp 专用
 
-与 split-k 方案类似，sliced-k 旨在提高 M 和 N 维度较小但 K 维度较大的内核的效率。在线程块级别，参数 CtaTileN 和 CtaTileM 通过将工作划分到不同的线程束 (warp) 来体现并行性。更大的 warpTile 可以带来更好的指令级并行性 (ILP) 和重用性，但也会限制每个线程块中运行的线程束数量，从而降低效率。
+下面关于 warp 专用的内容针对 Hopper kernel 设计。Blackwell SM100 kernel 的 warp 专用结构与 Hopper 截然不同，但把生产者与消费者分离的概念仍然适用。
 
-为了提高此类方案的效率，除了 ctaTileK 维度之外，对 warpTile 进行划分有助于更有效地利用硬件，允许在 CTA 中并发运行更多线程束。sliced-k 内核不仅在 CtaTileN 和 CtaTileM 维度上，而且在 CtaTileK 维度上也对线程块的计算进行划分。因此，sliced-k 会带来少量开销，即需要在最后对参与的线程束进行归约。这是因为每个 warp 只使用 CtaTileK 的一个“切片”进行计算，因此每个 warp 在归约之前只有一个部分和。
+从 Hopper 开始，CUTLASS 3.0 把 warp 专用（Warp Specialization）融入 kernel 设计。一个线程块被划分为两组 warp：生产者 warp 组和消费者 warp 组。生产者 warp 组使用新的张量内存加速器（TMA）把数据从全局内存加载到共享内存缓冲区。
 
-### Hopper Warp Specialization
+生产者 warp 组（DMA）等待消费者 warp 组通过新增的异步 pipeline 类把共享内存缓冲区标记为空；数据写入共享内存后，TMA 会更新与该 stage 关联的 barrier，通知相应线程缓冲区已填满。消费者 warp 组（MMA）则等待生产者组发出缓冲区已填满的信号，然后发起 Tensor Core MMA 操作，最后释放缓冲区，以便下一批 TMA 加载进行。
 
-注意：以下关于 warp-specialization 的部分包含针对 Hopper 内核设计的具体细节。Blackwell SM100 内核的 warp-specialization 结构与 Hopper 内核截然不同，但生产者和消费者代理分离的概念仍然适用。
+#### Warp 专用持久化 Cooperative kernel 设计
 
-从 Hopper 内核开始，CUTLASS 3.0 将 warp-specialization 的概念融入到内核设计中。一个线程块被划分为两组线程束：生产者线程束组和消费者线程束组。生产者线程束组使用新的张量内存加速器 (TMA) 将数据从全局内存加载到共享内存缓冲区中。
+从 Hopper 开始引入的另一种 warp 专用 kernel 设计是 Warp-Specialized Persistent Cooperative kernel。与 warp 专用 kernel 一样，cooperative 设计保留 warp 组以及 warp 组之间 barrier 同步的概念，其显著特点是：
 
-生产者线程束组 (DMA) 等待消费者线程束组使用新增的**Async Pipeline class**发出共享内存缓冲区已满的信号。一旦数据写入共享内存，TMA 还会更新与该阶段关联的屏障，以通知受影响的线程缓冲区已满。另一方面，消费者线程束组（MMA）等待生产者线程束组发出缓冲区已满的信号，然后启动 Tensor Core MMA 操作。最后，消费者线程束组释放缓冲区，以便进行下一组 TMA 加载。
+1. 启动持久化线程块占满 GPU 架构中的所有 SM（数量见 KernelHardwareInfo 结构体）。这些持久化线程块负责给输出分 tile，在其生命周期内可能计算多个输出 tile，主要好处是分摊线程块启动和 kernel 序言（prologue）的开销。
+2. 两个消费者 warp 组协作处理同一个输出 tile，方法是把 tile 沿 M 维度对半分。这样每个消费者 warp 组的寄存器压力降低，因此可以用更大的 tile 尺寸，从而提升性能。
 
-**Warp-Specialized Persistent Cooperative kernel design**
+由于每个线程块现在要计算多个输出 tile，grid 启动的形状以及 tile 到线程块的调度由新的 tile 调度器管理。它会考虑集群形状和可用 SM 数量，计算出输出 tile 到已启动线程块的有效调度方案。
 
-从 Hopper 内核开始引入的另一种 warp-specialization 内核设计是  *Warp-Specialized Persistent Cooperative* 内核。与  warp-specialization 内核类似，cooperative 设计中也保留了 Warp 组和 Warp 组间屏障同步的概念。Warp-Specialized Persistent Cooperative kernel 的显著特点如下：
+#### Warp 专用持久化 Ping-Pong kernel 设计
 
-1. 持久的线程块被启动来占用 GPU 架构中所有的 SM。这些持久的线程块用于 tile output，因此在其生命周期内可能计算多个 output。其主要优势在于分摊了线程块启动和内核 prologue 的开销，这些开销是所有内核的典型特征。
-1. 存在两个消费者 warp groups 协作处理同一块 output tile，方法是将 output tile 沿着 M 维度分割成两半。这允许使用更大的 output tile，因为每个消费者 warp group 的寄存器压力降低了，从而可以提高性能。
+第三种 kernel 设计是 Warp-Specialized Persistent Ping-Pong kernel。与持久化 cooperative 类似，ping-pong 设计保留 warp 组、warp 组之间的 barrier 同步以及 grid 启动形状，其独特之处在于：
 
-由于每个线程块现在都要计算多个输出图块，因此网格启动的形状以及图块到线程块的调度都由新的图块调度器来管理。图块调度器会考虑集群的形状以及可用 SM 的数量，从而计算出输出图块到已启动线程块的有效调度方案。
-
-**Warp-Specialized Persistent Ping-Pong kernel design**
-
-第三种内核设计是 *Warp-Specialized Persistent Ping-Pong* 内核。与 Warp-Specialized Persistent Cooperative 内核类似，Persistent Ping-Pong 内核也保留了 Warp 组的概念、Warp 组之间的屏障同步以及网格启动的形式。Persistent Ping-Pong 的独特之处在于：
-
-1. 两个消费者 Warp 组使用 Tile 调度器分配不同的输出 tile。这使得一个消费者 Warp 组的 epilogue 可以与另一个消费者 Warp 组的数学运算重叠，从而最大限度地利用张量核心。
-1. 生产者 Warp 组使用有序序列屏障进行同步，按顺序依次填充两个消费者 Warp 组的缓冲区。
+1. 两个消费者 warp 组通过 tile 调度器分配到不同的输出 tile。这让一个消费者 warp 组的尾声可以与另一个消费者 warp 组的数学运算重叠，从而最大化 Tensor Core 利用率。
+2. 生产者 warp 组使用有序序列屏障（Ordered Sequence Barrier）同步，按顺序依次填充两个消费者 warp 组的缓冲区。
