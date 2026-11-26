@@ -66,7 +66,7 @@ sm90_gemm_tma_warpspecialized (基础 WS)
 
 ---
 
-## 3. Warp Specification
+## 3. Warp Specialization
 
 ### 3.1 非特化 (sm90_gemm_tma)
 
@@ -206,7 +206,7 @@ Device 端 (Kernel 内):
 
 ## 6. FP8 的两条 mainloop 路线
 
-FP8 没有新增 kernel 文件，而是复用 warp specification 的 384 线程骨架，把 mainloop 换成 FP8 特化版本。按 scale 粒度分两条路线。
+FP8 没有新增 kernel 文件，而是复用 warp specialization 的 384 线程骨架，把 mainloop 换成 FP8 特化版本。按 scale 粒度分两条路线。
 
 | | per-tensor | blockwise |
 |---|---|---|

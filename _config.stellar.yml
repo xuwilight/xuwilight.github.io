@@ -188,6 +188,8 @@ features:
     provider: mathjax
     mathjax:
       js: https://gcore.jsdelivr.net/npm/mathjax@3.2.2/es5/tex-mml-chtml.min.js
+  reveal:
+    enabled: false
   color_scheme_switch:
     enabled: true
 
