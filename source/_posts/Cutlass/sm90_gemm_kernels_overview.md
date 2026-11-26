@@ -13,7 +13,7 @@ CUTLASS 为 SM90 (Hopper) 提供了 6 个半精度 GEMM kernel，沿 Warp 特化
 
 它们从最简单的 KernelTma 出发，先引入 Producer/Consumer 分离，再分出 Pingpong 的 tile 交替与 Cooperative 的同 tile 协作，最后叠加运行时 TensorMap 更新以支持 Batched 与 Grouped GEMM。除半精度外，FP8 复用这些 kernel 骨架、只把 mainloop 换成 FP8 特化版本，按 scale 粒度分 per-tensor 与 blockwise 两条路线。
 
-下文先按三条主线梳理 6 个半精度 kernel，再单独讲 FP8 的 mainloop 特化，最后给出调度策略、Scheduler 选择与选型对照；每个算子的逐行剖析见文末的剖析文章清单。
+下文先按三条主线梳理 6 个半精度 kernel，再单独讲 FP8 的 mainloop 特化，最后给出调度策略、Scheduler 选择与选型对照。
 
 
 ## 1. SM90 GEMM Kernel 家族概览
@@ -30,8 +30,6 @@ CUTLASS 为 SM90 (Hopper) 架构提供了 6 个半精度 GEMM kernel，按复杂
 | 6 | sm90_gemm_array_tma_warpspecialized_cooperative.hpp | KernelPtrArrayTmaWarpSpecializedCooperative | 384 | #4 + Ptr-Array/Grouped |
 
 所有 kernel 都是 GemmUniversal 模板类的特化版本，通过 SFINAE 机制根据 DispatchPolicy::Schedule 选择。线程数按 CTA 的 launch 配置计：Producer 以整个 warp group（128 线程）为粒度预留，即使基础 WS 版实际只有 Warp 0 发 TMA，也占满 128 线程，所以 WS 是 128 Consumer + 128 Producer = 256。
-
-FP8 不新增 kernel 文件，而是替换 mainloop，见 §6。
 
 ---
 
@@ -66,38 +64,21 @@ sm90_gemm_tma_warpspecialized (基础 WS)
 2. sm90_gemm_tma_warpspecialized → Pingpong/Cooperative：增加第二个 Consumer，两种策略
 3. Pingpong/Cooperative → Array Pingpong/Array Cooperative：增加 TensorMap 运行时更新
 
-FP8 是横切在这条演化线之外的第四条主线：它不改变 kernel 骨架，只把 cooperative 的 mainloop 换成 FP8 特化版（§6）。
-
 ---
 
-## 3. 维度一 Warp 特化
+## 3. Warp Specification
 
 ### 3.1 非特化 (sm90_gemm_tma)
 
-```
-CTA (128 threads = 4 warps)
-┌──────────────────────────┐
-│  所有 warp 做 所有事情    │
-│  加载 + 计算 + 存储       │
-└──────────────────────────┘
-```
+CTA (128 threads = 4 warps)，所有 warp 做 所有事情。
 
 - 所有线程共同参与 TMA 加载和 WGMMA 计算
 - Mainloop 通过 collective_mma.operator() 一次性调用
-- 简单，但加载和计算不能重叠
+- 加载和计算不能重叠
 
 ### 3.2 Warp 特化 (其他 5 个 kernel)
 
-```
-CTA
-┌──────────────────────────┐
-│ Producer Warp Group      │
-│  专门负责 TMA 加载        │
-├──────────────────────────┤
-│ Consumer Warp Group(s)   │
-│  专门负责 WGMMA 计算      │
-└──────────────────────────┘
-```
+Producer Warp Group 专门负责 TMA 加载，Consumer Warp Group(s) 专门负责 WGMMA 计算。
 
 - Producer 和 Consumer 分离，通过异步 pipeline 通信
 - 加载和计算可以重叠（Producer 加载下一个 tile 时，Consumer 计算当前 tile）
@@ -108,7 +89,7 @@ CTA
 在 Pingpong/Cooperative 中，Producer warp 组（128 线程 = 4 warp）进一步细分为：
 
 | Warp | 普通 Pingpong/Coop | Array Pingpong/Coop |
-|------|-------------------|---------------------|
+|:------:|:-------------------:|:---------------------:|
 | Warp 0 | Mainloop (TMA A/B) | Mainloop (TMA A/B) |
 | Warp 1 | Warp1 (Scheduler) | MainloopAux (辅助加载) |
 | Warp 2 | Epilogue (TMA C) | Epilogue (TMA C) |
@@ -120,7 +101,7 @@ Array 版本的 Warp 1 和 Warp 3 角色互换，因为 GroupScheduler 需要专
 
 ---
 
-## 4. 维度二 多 Consumer 策略中的 Pingpong 与 Cooperative
+## 4. Pingpong 与 Cooperative
 
 ### 4.1 基本 WS（1 Consumer）
 
@@ -140,7 +121,7 @@ Consumer1:         [MMA 1] [Epi 1] [MMA 3] [Epi 3] ...
                      ↕ 重叠 ↕
 ```
 
-- 2 个 Consumer 处理不同的 tile（C0: 偶数, C1: 奇数）
+- 2 个 Consumer 处理不同的 tile
 - C0 的 Epilogue 与 C1 的 MMA 重叠
 - 通过 MathWarpGroupOrderBarrier<2,2> 协调交替
 - TiledMma = 128 线程，Pipeline 推进 ×2
@@ -159,7 +140,7 @@ Consumer0 + Consumer1: [MMA 0 (256线程)] [Epi 0] [MMA 1 (256线程)] [Epi 1] .
 ### 4.4 Pingpong vs Cooperative 核心对比
 
 | 特性 | Pingpong | Cooperative |
-|------|----------|-------------|
+|:------:|:----------:|:-------------:|
 | 优化目标 | 隐藏 Epilogue 延迟 | 提高 MMA 吞吐量 |
 | Consumer 工作方式 | 交替不同 tile | 协作同一 tile |
 | TiledMma 线程数 | 128 | 256 |
@@ -167,11 +148,10 @@ Consumer0 + Consumer1: [MMA 0 (256线程)] [Epi 0] [MMA 1 (256线程)] [Epi 1] .
 | MathWarpGroupOrderBarrier | 有 | 无 |
 | StreamK | 不支持 | 支持 |
 | Pipeline 推进 | ×2 | ×1 |
-| 最佳场景 | 重 Epilogue | 重 MMA / 大矩阵 |
 
 ---
 
-## 5. 维度三 Ptr-Array 与 Grouped GEMM
+## 5. Ptr-Array 与 Grouped GEMM
 
 ### 5.1 普通 GEMM vs Ptr-Array vs Grouped
 
@@ -212,12 +192,11 @@ Device 端 (Kernel 内):
 ### 5.3 Array Kernel 的额外特性
 
 | 特性 | 普通 Kernel | Array Kernel |
-|------|------------|-------------|
+|:------:|:------------:|:-------------:|
 | TensorMap | Host 预创建，不变 | Device 运行时更新 |
 | TensorMapStorage | 无 | 有（在 SharedStorage 中） |
 | Workspace | 调度器 | 调度器 + mainloop + epilogue |
 | TMA Prefetch | 支持 | 不支持（运行时更新） |
-| GDC | 全局设置 | 强制 false |
 | ProblemShape | <M,N,K,L> | 特殊类型（含 get_problem_shape()） |
 | GroupScheduler | 不支持 | 支持 |
 | TileSchedulerStages | 由策略决定 | 8（固定） |
@@ -227,7 +206,7 @@ Device 端 (Kernel 内):
 
 ## 6. FP8 的两条 mainloop 路线
 
-FP8 不新增 kernel 文件，而是复用 cooperative 的 384 线程骨架（sm90_gemm_tma_warpspecialized_cooperative.hpp），把 mainloop 换成 FP8 特化版本。按 scale 粒度分两条路线。
+FP8 没有新增 kernel 文件，而是复用 warp specification 的 384 线程骨架，把 mainloop 换成 FP8 特化版本。按 scale 粒度分两条路线。
 
 | | per-tensor | blockwise |
 |---|---|---|
@@ -240,7 +219,7 @@ FP8 不新增 kernel 文件，而是复用 cooperative 的 384 线程骨架（sm
 
 两条路线共享 fp8_accumulation.hpp 的 GmmaFP8Accumulation：WGMMA 只写一块临时累加器，每累加 mma_promotion_interval（默认 4）次 MMA 就把这块小和加到 FP32 主累加器、临时累加器清零，用这个办法把有限尾数带来的累加舍入误差限制在小范围。per-tensor 在这一步只做加法，blockwise 多做一次 scale_a×scale_b 的乘法。
 
-临时累加器（accm_temp = make_fragment_like(accum)）让每线程的累加器寄存器翻倍，这是决定 FP8 只能用 cooperative 的关键。cooperative 沿 M 把 tile 拆给两个 warp group、主累加器被摊薄，M128N128 时单份 64 寄存器、翻倍后 128，装得下；pingpong 的单个 warp group 独扛整个 tile，翻倍后超出每线程上限。因此 FP8 实际只用 cooperative（或退到 M=64 的 pingpong），选型上 FP8 几乎等价于选 cooperative。
+临时累加器（accm_temp = make_fragment_like(accum)）让每线程的累加器寄存器翻倍，这是决定 FP8 只能用 cooperative 的关键。cooperative 沿 M 把 tile 拆给两个 warp group、主累加器被摊薄，M128N128 时单份 64 寄存器、翻倍后 128；pingpong 的单个 warp group 处理整个 tile，翻倍后超出每线程上限。因此 FP8 实际只用 cooperative（或退到 M=64 的 pingpong），选型上 FP8 几乎等价于选 cooperative。
 
 还有一组带 FP8FastAccum 后缀的调度名（如 KernelTmaWarpSpecializedCooperativeFP8FastAccum）。它们不触发上面的 FP8 特化 mainloop，而是由 builder 路由到普通 sm90_mma_tma_gmma_ss.hpp，把 FP8 乘积直接累加进单个 FP32 累加器，省掉临时累加器和定期提升，以更少的加法与寄存器换吞吐。
 
@@ -249,17 +228,14 @@ FP8 不新增 kernel 文件，而是复用 cooperative 的 384 线程骨架（sm
 ## 7. 技术特性对比矩阵
 
 | 特性 | Tma | WS | Pong | Coop | ArrPong | ArrCoop |
-|------|-----|-----|------|------|---------|---------|
+|:------:|:-----:|:-----:|:------:|:------:|:---------:|:---------:|
 | 线程数 | 128 | 256 | 384 | 384 | 384 | 384 |
 | Warp 特化 | 否 | 是 | 是 | 是 | 是 | 是 |
 | Consumer 数 | 1 | 1 | 2 | 2 | 2 | 2 |
 | TiledMma 线程 | 128 | 128 | 128 | 256 | 128 | 256 |
 | Consumer 策略 | - | 串行 | 交替 | 协作 | 交替 | 协作 |
-| MathWgOrderBarrier | 无 | 无 | <2,2> | 无 | <2,2> | 无 |
 | Pipeline 推进 | ×1 | ×1 | ×2 | ×1 | ×2 | ×1 |
 | 持久化 | 否 | 是 | 是 | 是 | 是 | 是 |
-| GDC | 否 | 是 | 是 | 是 | 否 | 否 |
-| StreamK | 否 | 是 | 否 | 是 | 是 | 是 |
 | Ptr-Array | 否 | 否 | 否 | 否 | 是 | 是 |
 | Grouped GEMM | 否 | 否 | 否 | 否 | 是 | 是 |
 | TensorMap 更新 | 否 | 否 | 否 | 否 | 是 | 是 |
@@ -341,7 +317,7 @@ using CollectiveMainloop = typename CollectiveBuilder<
 ### 9.1 Scheduler 类型
 
 | Scheduler | 适用 Kernel | 特点 |
-|-----------|------------|------|
+|:-----------:|:------------:|:------:|
 | PersistentScheduler | Tma, WS | 基本持久化调度 |
 | StreamKScheduler | WS, Cooperative | StreamK 负载均衡 |
 | GroupScheduler | Array kernels | 分组调度，8 级管道 |
@@ -349,7 +325,7 @@ using CollectiveMainloop = typename CollectiveBuilder<
 ### 9.2 各 Kernel 的 Scheduler 支持
 
 | Kernel | PersistentScheduler | StreamKScheduler | GroupScheduler |
-|--------|-------------------|-----------------|---------------|
+|:--------:|:-------------------:|:-----------------:|:---------------:|
 | Tma | ✓ | ✗ | ✗ |
 | WS | ✓ | ✓ | ✗ |
 | Pong | ✓ | ✗ | ✗ |
@@ -366,79 +342,9 @@ using CollectiveMainloop = typename CollectiveBuilder<
 
 ---
 
-## 10. Kernel 选型指南
+## 10. 共享基础设施
 
-### 10.1 决策流程图
-
-```
-                    需要做什么类型的 GEMM？
-                            │
-              ┌─────────────┼─────────────┐
-              ▼             ▼             ▼
-         普通 GEMM    Ptr-Array/     Grouped GEMM
-                      Batched
-              │             │             │
-              │             └──────┬──────┘
-              │                    │
-              │           需要 TensorMap 更新
-              │                    │
-              │         ┌──────────┴──────────┐
-              │         ▼                     ▼
-              │    Array Pingpong      Array Cooperative
-              │    (128线程, 交替)      (256线程, 协作)
-              │
-              │
-    线程数和性能需求？
-              │
-    ┌─────────┼──────────┐
-    ▼         ▼          ▼
-  简单      中等        高性能
-    │         │          │
-    ▼         ▼          │
-  Tma        WS          │
-  (128T)   (256T)        │
-                         │
-                   需要什么优化？
-                         │
-              ┌──────────┴──────────┐
-              ▼                     ▼
-        Epilogue 重            MMA 重 / 大 Tile
-              │                     │
-              ▼                     ▼
-          Pingpong              Cooperative
-         (384T, 交替)          (384T, 协作)
-```
-
-FP8 不走 Tma/WS，直接进 Cooperative：寄存器翻倍把 pingpong 挤掉了，per-tensor 与 blockwise 都挂在这条分支上。
-
-### 10.2 选择指南表
-
-| 场景 | 推荐 Kernel | 原因 |
-|------|------------|------|
-| 学习/调试 | sm90_gemm_tma | 最简单，易理解 |
-| 小矩阵 | sm90_gemm_tma | 非持久化，无开销 |
-| 通用 GEMM | sm90_gemm_tma_warpspecialized | 加载计算重叠 |
-| 重 Epilogue | sm90_gemm_tma_warpspecialized_pingpong | 隐藏 Epilogue 延迟 |
-| 大 Tile / MMA 重 | sm90_gemm_tma_warpspecialized_cooperative | 256线程高吞吐 |
-| 需要 StreamK | sm90_gemm_tma_warpspecialized_cooperative | 支持 StreamK |
-| FP8 推理（per-tensor） | cooperative + FP8 mainloop（Example 54） | promote 控精度，scale 在 epilogue |
-| FP8 训练（blockwise） | cooperative + FP8Blockwise（Example 67） | block scale 进 mainloop 提升阶段 |
-| Batched (指针数组) | sm90_gemm_array_tma_warpspecialized_pingpong | TensorMap 更新 |
-| Grouped GEMM (MoE) | sm90_gemm_array_tma_warpspecialized_cooperative | 大 Tile + Grouped |
-| Grouped + 重 Epilogue | sm90_gemm_array_tma_warpspecialized_pingpong | 交替 + Grouped |
-
-### 10.3 Tile 大小建议
-
-| TiledMma 线程 | 推荐 Tile | 适用 Kernel |
-|--------------|----------|------------|
-| 128 | 128×128 | Tma, WS, Pingpong, ArrPong |
-| 256 | 256×128, 128×256 | Cooperative, ArrCoop, FP8 |
-
----
-
-## 11. 共享基础设施
-
-### 11.1 CollectiveMainloop
+### 10.1 CollectiveMainloop
 
 所有 kernel 使用 CollectiveMainloop 封装 mainloop 逻辑：
 
@@ -450,7 +356,7 @@ FP8 不走 Tma/WS，直接进 Cooperative：寄存器翻倍把 pingpong 挤掉�
 | sm90_mma_tma_gmma_ss_warpspecialized_fp8_blockwise_scaling.hpp | FP8 blockwise（提升时乘 block scale） |
 | Array 版本的 mainloop | Array kernels (带 TensorMap 更新) |
 
-### 11.2 CollectiveEpilogue
+### 10.2 CollectiveEpilogue
 
 | Epilogue 实现 | 适用 Kernel |
 |--------------|------------|
@@ -460,7 +366,7 @@ FP8 不走 Tma/WS，直接进 Cooperative：寄存器翻倍把 pingpong 挤掉�
 
 非特化的 KernelTma 用简单的 LinearCombination；warp-specialized（含 FP8）启用 EVT（Epilogue Visitor Tree）。FP8 的 epilogue 把整条输出公式 ScaledLinCombPerRowBiasEltActAmaxAux 编成一棵 EVT，一次算完 scale、bias、激活、amax 与量化。
 
-### 11.3 Pipeline
+### 10.3 Pipeline
 
 所有 warp 特化 kernel 共享 sm90_pipeline.hpp 中的 pipeline 实现：
 
@@ -471,7 +377,7 @@ FP8 不走 Tma/WS，直接进 Cooperative：寄存器翻倍把 pingpong 挤掉�
 | PipelineTmaStore | Epilogue D 存储 |
 | OrderedSequenceBarrier | Warp 组间同步 |
 
-### 11.4 关键共享组件
+### 10.4 关键共享组件
 
 - TMA (Tensor Memory Accelerator)：所有 kernel 使用 TMA 进行异步数据搬运
 - WGMMA (Warp Group MMA)：所有 kernel 使用 WGMMA 进行矩阵乘法
@@ -480,8 +386,8 @@ FP8 不走 Tma/WS，直接进 Cooperative：寄存器翻倍把 pingpong 挤掉�
 - GDC (Grid Dependency Control)：硬件级 grid 依赖（部分 kernel）
 
 ---
-
-## 12. 剖析文章清单
+<!-- 
+## 文章清单
 
 每个算子都有对应的逐行剖析文章：
 
@@ -498,7 +404,7 @@ FP8 不走 Tma/WS，直接进 Cooperative：寄存器翻倍把 pingpong 挤掉�
 | Tile Scheduler | CUTLASS SM90 Tile Scheduler 调度机制剖析 |
 | Pipeline | CUTLASS SM90 流水线 Pipeline 机制剖析 |
 
----
+--- -->
 
 ## 总结
 
