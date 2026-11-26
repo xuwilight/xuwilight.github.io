@@ -16,7 +16,7 @@ leftbar:
     href: /
 
   # 侧边栏主导航菜单
-  menu_columns: 3
+  menu_columns: 4
   menu:
     - id: post
       icon: default:documents
@@ -26,6 +26,10 @@ leftbar:
       icon: default:category
       title: 分类
       url: /categories/
+    - id: series
+      icon: default:notebook
+      title: 系列
+      url: /series/
     - id: about
       icon: default:profile
       title: 关于
@@ -63,6 +67,11 @@ profiles:
         - recent
     rightbar:
       widgets: []
+    listing_nav:
+      enabled: true
+      tabs:
+        - title: 系列
+          url: /series/
 
   wiki_index:
     path: /wiki/

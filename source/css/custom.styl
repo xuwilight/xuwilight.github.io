@@ -492,3 +492,57 @@ body[data-article-style='tech'] article.content h2
 
     &:hover
       transform: none
+
+// ==================== 10. 按分类分组系列索引 ====================
+
+.series-index
+  padding: 0
+
+  .series-group
+    padding: 1.25rem 1rem 1.5rem
+    border-bottom: 1px dashed var(--block-border)
+
+    &:first-child
+      padding-top: 0
+
+    &:last-child
+      border-bottom: 0
+
+  .series-header
+    display: flex
+    align-items: center
+    justify-content: space-between
+    gap: 1rem
+    margin-bottom: 0.75rem
+
+  .series-title
+    position: relative
+    padding-bottom: 4px
+    color: var(--text-p1)
+    font-family: Monaco, Menlo, Consolas, system-ui, monospace, sans-serif
+    font-size: 1.05rem
+    font-weight: 700
+    text-decoration: none
+
+    &:after
+      content: ''
+      position: absolute
+      right: 0
+      bottom: 0
+      left: 0
+      height: 4px
+      border-radius: 4px
+      background: var(--theme)
+
+    &:hover
+      color: var(--text)
+
+  .series-count
+    flex-shrink: 0
+    color: var(--text-p4)
+    font-family: Monaco, Menlo, Consolas, system-ui, monospace, sans-serif
+    font-size: 0.8rem
+    font-weight: 700
+
+  .archive-list a.post
+    margin: 0.2rem 0
